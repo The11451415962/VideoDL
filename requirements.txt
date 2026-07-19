@@ -1,0 +1,10 @@
+# VideoDL 依赖
+
+# 本项目使用 Python 标准库（tkinter / json / os / re / subprocess / threading / shutil），无需额外 pip 包。
+
+# 外部可执行文件（需自行下载）：
+#   yt-dlp.exe  → https://github.com/yt-dlp/yt-dlp/releases
+#   ffmpeg.exe  → https://ffmpeg.org/download.html （可选，用于合并视频/音频流）
+
+# 如需通过 pip 安装 yt-dlp 作为备选（非 GUI 模式使用）：
+# yt-dlp

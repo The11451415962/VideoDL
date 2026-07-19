@@ -1,0 +1,11 @@
+{
+  "save_dir": "C:/Users/YourName/Desktop/VideoDL",
+  "proxy_mode": "auto",
+  "proxy_url": "http://127.0.0.1:7897",
+  "cookie_mode": "none",
+  "cookie_path": "",
+  "cookie_browser": "chrome",
+  "default_format": "mp4",
+  "default_quality": "best",
+  "auto_open_folder": true
+}

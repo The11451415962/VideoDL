@@ -1,0 +1,42 @@
+# 用户配置（包含本地路径、代理密码等敏感信息，不提交）
+config.json
+
+# 浏览器导出的登录态 Cookie（敏感，不提交）
+cookies.txt
+ec7fda11-4eeb-45c5-a8cf-16cc8b8a0c2e.txt
+*.cookies.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env/
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 二进制工具（体积大，用户自行下载）
+tools/yt-dlp.exe
+tools/ffmpeg.exe
+
+# 日志
+*.log
