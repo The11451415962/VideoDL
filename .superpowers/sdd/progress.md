@@ -23,4 +23,14 @@ Git work branch: `feat/android-v1` (base main)
 - [ ] Task 15: release 签名 + APK 输出
 
 ## Completed
-（暂无）
+- Task 1: complete (commits 8088289..81d1fb2, review ✅ Approved)
+
+## Minor findings (carry to final review)
+- T1: empty `main` product flavor (app/build.gradle.kts) is dead config — let next task drop or explain it
+- T1: `ndk { abiFilters += listOf("arm64-v8a") }` sits in defaultConfig, constrains debug too — intentional now but flag for emulator builds later
+- T1: MainActivity stub extends `android.app.Activity` not `ComponentActivity` — next Compose task should convert it
+- T1: report text says gradle-8.7-all.zip, committed is -bin.zip (cosmetic)
+
+## Concerns carried forward
+- Chaquopy host-Python version drifts per machine and can hit cgi crash on ≥3.13; embedded Python stable 3.10
+- yt-dlp pip install is network-dependent at build time
