@@ -17,6 +17,8 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from datetime import datetime
 
+from error_diagnosis import diagnose  # 下载失败诊断模块
+
 # ============================================================
 # 常量配置
 # ============================================================
@@ -138,6 +140,145 @@ def check_ffmpeg(config: dict) -> str | None:
     return None
 
 
+# ============================================================
+# 主题 / 样式（全局配色、字体与 ttk 风格）
+# ============================================================
+COLORS = {
+    "bg": "#f4f6fb",            # 窗口背景
+    "surface": "#ffffff",       # 卡片表面
+    "border": "#e3e8f0",        # 边框
+    "primary": "#4f6ef7",       # 主色（强调蓝）
+    "primary_hover": "#3f5ae0",
+    "primary_bg": "#eef2ff",    # 主色浅底
+    "text": "#1f2430",          # 主文字
+    "muted": "#6b7280",         # 次要文字
+    "success": "#16a34a",
+    "error": "#dc2626",
+    "warn": "#d97706",
+    "trough": "#e9edf5",        # 进度条槽
+    "log_bg": "#fbfcfe",        # 日志框底色
+}
+
+FONT_UI = ("Microsoft YaHei UI", 10)
+FONT_UI_BOLD = ("Microsoft YaHei UI", 10, "bold")
+FONT_TITLE = ("Microsoft YaHei UI", 15, "bold")
+FONT_SUB = ("Microsoft YaHei UI", 9)
+FONT_MONO = ("Consolas", 9)
+
+
+def apply_theme(root) -> None:
+    """为窗口/对话框应用统一的现代化扁平主题（基于 clam 主题定制）。"""
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+
+    root.configure(bg=COLORS["bg"])
+
+    # ---- 全局默认 ----
+    style.configure(".", font=FONT_UI, background=COLORS["bg"], foreground=COLORS["text"])
+    style.configure("TFrame", background=COLORS["bg"])
+
+    # ---- 卡片 ----
+    style.configure("Card.TFrame", background=COLORS["surface"])
+    style.configure("Card.TLabel", background=COLORS["surface"], foreground=COLORS["text"])
+    style.configure("CardTitle.TLabel", background=COLORS["surface"],
+                    foreground=COLORS["text"], font=FONT_UI_BOLD)
+    style.configure("Hint.TLabel", background=COLORS["surface"],
+                    foreground=COLORS["muted"], font=FONT_SUB)
+    style.configure("Info.TLabel", background=COLORS["surface"],
+                    foreground=COLORS["text"], font=FONT_UI)
+    style.configure("Field.TLabel", background=COLORS["surface"],
+                    foreground=COLORS["muted"], font=FONT_UI)
+
+    # ---- LabelFrame ----
+    style.configure("TLabelframe", background=COLORS["bg"],
+                    bordercolor=COLORS["border"], relief="solid")
+    style.configure("TLabelframe.Label", background=COLORS["bg"],
+                    foreground=COLORS["text"], font=FONT_UI_BOLD)
+
+    # ---- Entry ----
+    style.configure("TEntry", fieldbackground=COLORS["surface"], background=COLORS["surface"],
+                    foreground=COLORS["text"], bordercolor=COLORS["border"],
+                    lightcolor=COLORS["border"], darkcolor=COLORS["border"],
+                    insertcolor=COLORS["text"], padding=6)
+    style.map("TEntry",
+              bordercolor=[("focus", COLORS["primary"])],
+              lightcolor=[("focus", COLORS["primary"])],
+              darkcolor=[("focus", COLORS["primary"])])
+
+    # ---- Combobox ----
+    style.configure("TCombobox", fieldbackground=COLORS["surface"], background=COLORS["surface"],
+                    foreground=COLORS["text"], bordercolor=COLORS["border"],
+                    arrowcolor=COLORS["muted"], padding=4)
+    style.map("TCombobox",
+              bordercolor=[("focus", COLORS["primary"])],
+              lightcolor=[("focus", COLORS["primary"])],
+              darkcolor=[("focus", COLORS["primary"])])
+    root.option_add("*TCombobox*Listbox.background", COLORS["surface"])
+    root.option_add("*TCombobox*Listbox.foreground", COLORS["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", COLORS["primary"])
+    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+
+    # ---- 普通按钮 ----
+    style.configure("TButton", background=COLORS["surface"], foreground=COLORS["text"],
+                    bordercolor=COLORS["border"], lightcolor=COLORS["border"],
+                    darkcolor=COLORS["border"], padding=(10, 6),
+                    focusthickness=0, relief="flat")
+    style.map("TButton",
+              background=[("disabled", "#eef1f7"), ("pressed", "#e6eaf2"), ("active", "#f0f3fa")],
+              foreground=[("disabled", "#a3abb8")],
+              bordercolor=[("focus", COLORS["primary"])])
+
+    # ---- 主按钮（强调色） ----
+    style.configure("Accent.TButton", background=COLORS["primary"], foreground="#ffffff",
+                    bordercolor=COLORS["primary"], lightcolor=COLORS["primary"],
+                    darkcolor=COLORS["primary"], padding=(16, 8), font=FONT_UI_BOLD)
+    style.map("Accent.TButton",
+              background=[("disabled", "#b6c1f7"), ("pressed", COLORS["primary_hover"]),
+                          ("active", COLORS["primary_hover"])],
+              foreground=[("disabled", "#f0f3ff")])
+
+    # ---- 次级按钮 ----
+    style.configure("Secondary.TButton", background=COLORS["primary_bg"], foreground=COLORS["primary"],
+                    bordercolor=COLORS["primary_bg"], lightcolor=COLORS["primary_bg"],
+                    darkcolor=COLORS["primary_bg"], padding=(10, 6), font=FONT_UI_BOLD)
+    style.map("Secondary.TButton",
+              background=[("disabled", "#eef1f7"), ("pressed", "#dfe6ff"), ("active", "#e3e9ff")],
+              foreground=[("disabled", "#a3abb8")])
+
+    # ---- 进度条 ----
+    style.configure("Horizontal.TProgressbar", background=COLORS["primary"],
+                    troughcolor=COLORS["trough"], bordercolor=COLORS["trough"],
+                    lightcolor=COLORS["primary"], darkcolor=COLORS["primary"], thickness=10)
+
+    # ---- 复选框 / 滚动条 ----
+    style.configure("TCheckbutton", background=COLORS["surface"], foreground=COLORS["text"])
+    style.map("TCheckbutton", background=[("active", COLORS["surface"])])
+    style.configure("Vertical.TScrollbar", background=COLORS["border"],
+                    troughcolor=COLORS["bg"], bordercolor=COLORS["bg"], arrowcolor=COLORS["muted"])
+
+
+def make_card(parent, pad=(14, 12, 14, 12), **pack):
+    """创建一个卡片（圆角边框白底），返回用于放入控件的内层 Frame。
+
+    用法：inner = make_card(parent, pady=(0, 10)); 往 inner 里加控件。
+    """
+    card = tk.Frame(parent, bg=COLORS["surface"], bd=0,
+                    highlightbackground=COLORS["border"], highlightcolor=COLORS["primary"],
+                    highlightthickness=1)
+    inner = ttk.Frame(card, style="Card.TFrame", padding=pad)
+    inner.pack(fill=tk.BOTH, expand=True)
+    card.pack(**pack)
+    return inner
+
+
+def card_title(parent, text: str) -> None:
+    """在卡片内添加小节标题。"""
+    ttk.Label(parent, text=text, style="CardTitle.TLabel").pack(anchor="w")
+
+
 # --------------- 平台检测 ---------------
 def detect_platform(url: str) -> str:
     """根据 URL 返回平台名称。"""
@@ -211,6 +352,11 @@ def resolve_format_string(fmt: str, quality: str, platform: str = "未知") -> l
 
     out_fmt = fmt  # "mp4" 或 "webm"
     return ["-f", selector, "--merge-output-format", out_fmt]
+
+
+def output_ext(fmt: str, quality: str) -> str:
+    """返回实际输出文件扩展名；audio 画质总是产出 mp3。"""
+    return "mp3" if (fmt == "mp3" or quality == "audio") else fmt
 
 
 # --------------- yt-dlp 命令组装 ---------------
@@ -307,7 +453,7 @@ class Downloader:
 
     def __init__(self, url: str, output_path: str, config: dict,
                  ffmpeg_path: str | None,
-                 info_cb, progress_cb, done_cb, log_cb):
+                 info_cb, progress_cb, done_cb, log_cb, error_cb=None):
         self.url = url
         self.output_path = output_path
         self.config = config
@@ -316,7 +462,10 @@ class Downloader:
         self.progress_cb = progress_cb  # (float)
         self.done_cb = done_cb          # (bool, str)
         self.log_cb = log_cb            # (str)
+        self.error_cb = error_cb      # (dict) 诊断报告回调
         self._proc = None
+        self._output_lines: list[str] = []  # 收集输出用于诊断
+        self._cancelled = False              # 用户主动取消标志
 
     def run(self) -> None:
         """主流程：抓信息 → 下载"""
@@ -329,10 +478,27 @@ class Downloader:
         # 阶段 1：获取视频信息
         info = self._fetch_info()
         if info:
+            # 用标题同步重建输出路径（必须在 _download 之前，否则与下载线程竞态）
+            self._apply_title_path(info)
             self.info_cb(info)
 
         # 阶段 2：下载
         self._download()
+
+    def _apply_title_path(self, info: dict) -> None:
+        """下载前用视频标题同步重建输出路径，避免与下载线程的竞态。"""
+        title = info.get("title")
+        if not title:
+            return
+        safe_title = re.sub(r'[\\/:*?"<>|]', '_', title).strip()
+        if not safe_title:
+            return
+        target_dir = os.path.dirname(self.output_path)
+        ext = output_ext(
+            self.config.get("default_format", "mp4"),
+            self.config.get("default_quality", "best"),
+        )
+        self.output_path = get_next_filepath(target_dir, safe_title, ext=ext)
 
     def _fetch_info(self) -> dict | None:
         """用 yt-dlp --dump-json 获取视频元数据。"""
@@ -382,9 +548,21 @@ class Downloader:
                 "duration": data.get("duration", 0),
                 "resolution": f'{data.get("width", "?")}x{data.get("height", "?")}',
                 "platform": detect_platform(self.url),
+                "thumbnail": data.get("thumbnail", "") or "",
+                "filesize": data.get("filesize") or data.get("filesize_approx") or 0,
             }
             self.log_cb(f"[信息] 获取成功：{info['title']}")
             return info
+        except subprocess.TimeoutExpired:
+            # communicate 超时不会结束子进程，需手动清理，否则残留孤儿进程
+            if self._proc is not None and self._proc.poll() is None:
+                try:
+                    self._proc.kill()
+                except OSError:
+                    pass
+            self._proc = None
+            self.log_cb("[警告] 获取信息超时（60 秒）")
+            return None
         except Exception as e:
             self._proc = None
             self.log_cb(f"[警告] 获取信息异常：{e}")
@@ -418,6 +596,7 @@ class Downloader:
             line_stripped = line.strip()
             if line_stripped:
                 self.log_cb(line_stripped)
+                self._output_lines.append(line_stripped)  # 收集用于诊断
             m = pattern.search(line_stripped) if line_stripped else None
             if m:
                 try:
@@ -431,15 +610,25 @@ class Downloader:
         rc = self._proc.wait()
         self._proc = None
 
+        if self._cancelled:
+            # 用户主动停止，不弹错误诊断框
+            self.done_cb(False, "已停止下载")
+            return
+
         if rc == 0:
             self.progress_cb(100.0)
             self.done_cb(True, "下载完成！")
         else:
             self.log_cb(f"[错误] yt-dlp 退出码：{rc}")
+            # 生成诊断报告并回调
+            if self.error_cb:
+                report = diagnose(self._output_lines)
+                self.error_cb(report)
             self.done_cb(False, f"下载失败，退出码：{rc}")
 
     def cancel(self):
         """终止下载。"""
+        self._cancelled = True
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
             self.log_cb("[用户] 已停止下载")
@@ -487,6 +676,7 @@ class SettingsDialog(tk.Toplevel):
         self.config = dict(config)  # 副本，取消不写入
         self._on_save = on_save
 
+        apply_theme(self)
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
@@ -595,7 +785,8 @@ class SettingsDialog(tk.Toplevel):
         # ---- 底部按钮 ----
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Button(btn_row, text="💾 保存", command=self._on_save_click).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(btn_row, text="保存", style="Accent.TButton",
+                   command=self._on_save_click).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Button(btn_row, text="取消", command=self._on_cancel).pack(side=tk.RIGHT)
 
     # --------------- Cookie 模式切换 ---------------
@@ -679,13 +870,177 @@ class SettingsDialog(tk.Toplevel):
 
 
 # ============================================================
+# 下载失败诊断报告对话框
+# ============================================================
+class ErrorReportDialog(tk.Toplevel):
+    """下载失败诊断报告 —— 显示原因、建议、可展开的技术详情。"""
+
+    def __init__(self, parent, report: dict):
+        super().__init__(parent)
+        self.title("下载失败诊断报告")
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+
+        self._report = report
+        self._details_visible = False
+
+        apply_theme(self)
+        self._build_ui()
+        self._center_on_parent(parent)
+
+        # ESC 关闭
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _build_ui(self):
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # ---- 顶部：错误图标 + 分类标题 ----
+        header = ttk.Frame(frame)
+        header.pack(fill=tk.X, pady=(0, 12))
+
+        lbl_icon = ttk.Label(header, text="❌", font=("Segoe UI", 20))
+        lbl_icon.pack(side=tk.LEFT, padx=(0, 10))
+
+        title_frame = ttk.Frame(header)
+        title_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(
+            title_frame, text="下载失败",
+            font=("Microsoft YaHei UI", 12, "bold"),
+        ).pack(anchor=tk.W)
+        self._category_lbl = ttk.Label(
+            title_frame,
+            text=self._report.get("category", "未知错误"),
+            foreground="#c0392b",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        )
+        self._category_lbl.pack(anchor=tk.W)
+
+        # ---- 原因 ----
+        reason_frame = ttk.LabelFrame(frame, text="📋 失败原因", padding=8)
+        reason_frame.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(
+            reason_frame,
+            text=self._report.get("reason", ""),
+            wraplength=420,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
+
+        # ---- 建议 ----
+        solution_frame = ttk.LabelFrame(frame, text="💡 解决建议", padding=8)
+        solution_frame.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(
+            solution_frame,
+            text=self._report.get("solution", ""),
+            wraplength=420,
+            justify=tk.LEFT,
+            foreground="#2c3e50",
+        ).pack(anchor=tk.W)
+
+        # ---- 技术详情（折叠面板） ----
+        self._details_frame = ttk.Frame(frame)
+        self._details_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+
+        self._btn_toggle = ttk.Button(
+            self._details_frame,
+            text="▶ 技术详情（点击展开原始日志）",
+            command=self._toggle_details,
+        )
+        self._btn_toggle.pack(fill=tk.X)
+
+        # 技术详情文本框（初始隐藏）
+        self._details_inner = ttk.Frame(self._details_frame)
+        # 不 pack，等展开时再显示
+
+        self._detail_text = tk.Text(
+            self._details_inner, height=8, state=tk.DISABLED,
+            wrap=tk.WORD, font=FONT_MONO,
+            background=COLORS["log_bg"], fg=COLORS["text"], relief=tk.FLAT, bd=0,
+            highlightbackground=COLORS["border"], highlightcolor=COLORS["border"],
+            highlightthickness=1, padx=8, pady=6,
+        )
+        detail_scroll = ttk.Scrollbar(
+            self._details_inner, orient=tk.VERTICAL,
+            command=self._detail_text.yview,
+        )
+        self._detail_text.configure(yscrollcommand=detail_scroll.set)
+        self._detail_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 填充原始日志
+        lines = self._report.get("all_lines", [])
+        self._detail_text.configure(state=tk.NORMAL)
+        self._detail_text.insert(tk.END, "\n".join(lines) if lines else "（无输出记录）")
+        self._detail_text.configure(state=tk.DISABLED)
+
+        # ---- 底部按钮 ----
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(
+            btn_row, text="📋 复制报告",
+            command=self._copy_report,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            btn_row, text="确定", command=self.destroy,
+        ).pack(side=tk.RIGHT)
+
+    def _toggle_details(self):
+        """展开 / 收起技术详情。"""
+        if self._details_visible:
+            self._details_inner.pack_forget()
+            self._btn_toggle.configure(text="▶ 技术详情（点击展开原始日志）")
+            self._details_visible = False
+        else:
+            self._details_inner.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+            self._btn_toggle.configure(text="▼ 技术详情（点击收起原始日志）")
+            self._details_visible = True
+
+    def _copy_report(self):
+        """将结构化报告复制到剪贴板。"""
+        r = self._report
+        matched = r.get("matched_line", "")
+        lines = r.get("all_lines", [])
+        text = (
+            f"【下载失败诊断报告】\n"
+            f"分类：{r.get('category', '')}\n"
+            f"原因：{r.get('reason', '')}\n"
+            f"建议：{r.get('solution', '')}\n"
+        )
+        if matched:
+            text += f"匹配行：{matched}\n"
+        if lines:
+            text += f"\n--- 原始日志 ---\n" + "\n".join(lines[-50:])  # 最多 50 行
+
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo("已复制", "诊断报告已复制到剪贴板。", parent=self)
+
+    def _center_on_parent(self, parent):
+        """窗口居中于父窗口。"""
+        self.update_idletasks()
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1 or h <= 1:
+            self.after(50, lambda: self._center_on_parent(parent))
+            return
+        x = parent.winfo_x() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - h) // 2
+        # 确保不超出屏幕
+        x = max(0, min(x, self.winfo_screenwidth() - w))
+        y = max(0, min(y, self.winfo_screenheight() - h))
+        self.geometry(f"+{x}+{y}")
+
+
+# ============================================================
 # GUI 主窗口
 # ============================================================
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("视频下载器")
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(660, 600)
+        self.geometry("720x680")
 
         # 加载完整配置
         self.config = load_config()
@@ -693,8 +1048,8 @@ class App(tk.Tk):
 
         self._dl: Downloader | None = None
         self._thread: threading.Thread | None = None
-        self._download_target_dir: str | None = None   # 下载时的目标目录，供标题重命名用
 
+        apply_theme(self)
         self._build_ui()
         self._center_window()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -718,140 +1073,179 @@ class App(tk.Tk):
 
     # --------------- 日志输出 ---------------
     def _log(self, msg: str):
-        """追加一行到日志框。"""
+        """追加一行到日志框，并按级别着色（时间戳灰、正文按类型）。"""
         self.log_text.configure(state=tk.NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{ts}] {msg}\n")
+        if msg.startswith(("[错误", "[失败")):
+            tag = "err"
+        elif msg.startswith("[警告"):
+            tag = "warn"
+        elif msg.startswith("[完成"):
+            tag = "ok"
+        else:
+            tag = "info"
+        self.log_text.insert(tk.END, f"[{ts}] ", "info")
+        self.log_text.insert(tk.END, msg + "\n", tag)
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
     # --------------- UI 构建 ---------------
     def _build_ui(self):
-        frame = ttk.Frame(self, padding=16)
-        frame.pack(fill=tk.BOTH, expand=True)
+        outer = ttk.Frame(self, padding=(20, 16, 20, 18))
+        outer.pack(fill=tk.BOTH, expand=True)
 
-        # ---- 第 1 行：视频链接 + 一键粘贴 ----
-        row1 = ttk.Frame(frame)
-        row1.pack(fill=tk.X)
-        ttk.Label(row1, text="视频链接：").pack(side=tk.LEFT)
+        # ---- 顶部标题 ----
+        header = tk.Frame(outer, bg=COLORS["bg"])
+        header.pack(fill=tk.X, pady=(0, 14))
+        accent = tk.Frame(header, bg=COLORS["primary"], width=4, height=40)
+        accent.pack(side=tk.LEFT, padx=(0, 10))
+        accent.pack_propagate(False)
+        title_box = tk.Frame(header, bg=COLORS["bg"])
+        title_box.pack(side=tk.LEFT)
+        tk.Label(title_box, text="视频下载器", bg=COLORS["bg"], fg=COLORS["text"],
+                 font=FONT_TITLE, anchor="w").pack(anchor="w")
+        tk.Label(title_box, text="粘贴链接 · 一键下载 · 自动归类", bg=COLORS["bg"],
+                 fg=COLORS["muted"], font=FONT_SUB, anchor="w").pack(anchor="w")
+
+        # ---- 视频链接卡片 ----
+        link_card = make_card(outer, pady=(0, 10))
+        card_title(link_card, "视频链接")
+        row1 = ttk.Frame(link_card, style="Card.TFrame")
+        row1.pack(fill=tk.X, pady=(8, 0))
         self.url_var = tk.StringVar()
-        self.entry_url = ttk.Entry(row1, textvariable=self.url_var, width=52)
-        self.entry_url.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        self.entry_url = ttk.Entry(row1, textvariable=self.url_var)
+        self.entry_url.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         self.entry_url.bind("<Return>", lambda _e: self._start_download())
         self.entry_url.bind("<Control-v>", lambda _e: self.after(10, self._smart_paste))
         self.entry_url.bind("<Button-3>", lambda _e: self.after(10, self._smart_paste))
         self.btn_paste = ttk.Button(
-            row1, text="📋 一键粘贴", command=self._paste_from_clipboard,
+            row1, text="一键粘贴", style="Secondary.TButton",
+            command=self._paste_from_clipboard,
         )
-        self.btn_paste.pack(side=tk.LEFT)
+        self.btn_paste.pack(side=tk.LEFT, padx=(8, 0))
 
-        # ---- 第 2 行：保存路径 + 更改按钮 ----
-        row_path = ttk.Frame(frame)
+        # ---- 保存路径卡片 ----
+        path_card = make_card(outer, pady=(0, 10))
+        card_title(path_card, "保存路径")
+        row_path = ttk.Frame(path_card, style="Card.TFrame")
         row_path.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(row_path, text="📁 保存路径：").pack(side=tk.LEFT)
         self.path_var = tk.StringVar(value=self.config["save_dir"])
-        self.entry_path = ttk.Entry(
-            row_path, textvariable=self.path_var, state="readonly", width=48,
-        )
-        self.entry_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        self.entry_path = ttk.Entry(row_path, textvariable=self.path_var, state="readonly")
+        self.entry_path.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=3)
         self.btn_change_path = ttk.Button(
-            row_path, text="📁 更改路径", command=self._change_save_dir,
+            row_path, text="更改路径", command=self._change_save_dir,
         )
-        self.btn_change_path.pack(side=tk.LEFT)
+        self.btn_change_path.pack(side=tk.LEFT, padx=(8, 0))
 
-        # ---- 第 3 行：格式 + 质量 + 代理（紧凑） ----
-        row3 = ttk.Frame(frame)
+        # ---- 下载选项卡片（格式 / 质量 / 代理） ----
+        opt_card = make_card(outer, pady=(0, 10))
+        card_title(opt_card, "下载选项")
+        row3 = ttk.Frame(opt_card, style="Card.TFrame")
         row3.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(row3, text="格式：").pack(side=tk.LEFT)
+        ttk.Label(row3, text="格式", style="Field.TLabel").pack(side=tk.LEFT)
         self.format_var = tk.StringVar(value=self.config["default_format"])
         self.cb_format = ttk.Combobox(
             row3, textvariable=self.format_var,
-            values=["mp4", "webm", "mp3"],
-            state="readonly", width=6,
+            values=["mp4", "webm", "mp3"], state="readonly", width=8,
         )
-        self.cb_format.pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(row3, text="质量：").pack(side=tk.LEFT)
+        self.cb_format.pack(side=tk.LEFT, padx=(6, 16))
+        ttk.Label(row3, text="质量", style="Field.TLabel").pack(side=tk.LEFT)
         self.quality_var = tk.StringVar(value=self.config["default_quality"])
         self.cb_quality = ttk.Combobox(
             row3, textvariable=self.quality_var,
-            values=["best", "1080p", "720p", "audio"],
-            state="readonly", width=7,
+            values=["best", "1080p", "720p", "audio"], state="readonly", width=8,
         )
-        self.cb_quality.pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(row3, text="代理：").pack(side=tk.LEFT)
+        self.cb_quality.pack(side=tk.LEFT, padx=(6, 16))
+        ttk.Label(row3, text="代理", style="Field.TLabel").pack(side=tk.LEFT)
         self.proxy_mode_var = tk.StringVar(
             value=self._label_for_proxy_mode(self.config["proxy_mode"]),
         )
         self.cb_proxy = ttk.Combobox(
             row3, textvariable=self.proxy_mode_var,
             values=["auto (自动)", "direct (直连)", "proxy (代理)"],
-            state="readonly", width=12,
+            state="readonly", width=14,
         )
-        self.cb_proxy.pack(side=tk.LEFT)
+        self.cb_proxy.pack(side=tk.LEFT, padx=(6, 0))
 
-        # ---- 第 4 行：视频信息 ----
-        info_frame = ttk.LabelFrame(frame, text="视频信息", padding=6)
-        info_frame.pack(fill=tk.X, pady=(8, 0))
+        # 选择变化即时持久化（否则重启丢失）
+        self.cb_format.bind("<<ComboboxSelected>>", lambda _e: self._sync_ui_to_config())
+        self.cb_quality.bind("<<ComboboxSelected>>", lambda _e: self._sync_ui_to_config())
+        self.cb_proxy.bind("<<ComboboxSelected>>", lambda _e: self._sync_ui_to_config())
+
+        # ---- 视频信息卡片 ----
+        info_card = make_card(outer, pady=(0, 10))
+        card_title(info_card, "视频信息")
         self.lbl_info = ttk.Label(
-            info_frame,
-            text="等待粘贴链接...",
+            info_card, text="等待粘贴链接...", style="Hint.TLabel",
             anchor=tk.W, justify=tk.LEFT,
         )
-        self.lbl_info.pack(fill=tk.X)
+        self.lbl_info.pack(fill=tk.X, pady=(8, 0))
 
-        # ---- 第 5 行：进度条 + 百分比 ----
+        # ---- 进度条 + 百分比 ----
+        prog_card = make_card(outer, pady=(0, 12))
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_bar = ttk.Progressbar(
-            frame, variable=self.progress_var, maximum=100, length=520,
+            prog_card, variable=self.progress_var, maximum=100,
         )
-        self.progress_bar.pack(fill=tk.X, pady=(8, 2))
-        self.lbl_percent = ttk.Label(frame, text="0.0%", anchor=tk.CENTER)
-        self.lbl_percent.pack()
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.lbl_percent = ttk.Label(prog_card, text="0.0%", style="Card.TLabel",
+                                     width=7, anchor=tk.E)
+        self.lbl_percent.pack(side=tk.RIGHT, padx=(12, 0))
 
-        # ---- 第 6 行：按钮组 ----
-        btn_row = ttk.Frame(frame)
-        btn_row.pack(fill=tk.X, pady=(8, 4))
+        # ---- 按钮组 ----
+        btn_row = ttk.Frame(outer, style="TFrame")
+        btn_row.pack(fill=tk.X, pady=(0, 12))
 
         self.btn_download = ttk.Button(
-            btn_row, text="🚀 开始下载", command=self._start_download,
+            btn_row, text="开始下载", style="Accent.TButton", command=self._start_download,
         )
-        self.btn_download.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_download.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_stop = ttk.Button(
-            btn_row, text="⏹ 停止下载", command=self._stop_download,
+            btn_row, text="停止下载", command=self._stop_download,
             state=tk.DISABLED,
         )
-        self.btn_stop.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_stop.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_open_folder = ttk.Button(
-            btn_row, text="📂 打开目录", command=self._open_today_folder,
+            btn_row, text="打开目录", command=self._open_today_folder,
         )
-        self.btn_open_folder.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_open_folder.pack(side=tk.LEFT, padx=(0, 8))
 
         self.btn_settings = ttk.Button(
-            btn_row, text="⚙ 设置", command=self._open_settings,
+            btn_row, text="设置", command=self._open_settings,
         )
         self.btn_settings.pack(side=tk.LEFT)
 
         self.btn_update = ttk.Button(
-            btn_row, text="🔄 更新核心", command=self._update_core,
+            btn_row, text="更新核心", style="Secondary.TButton", command=self._update_core,
         )
         self.btn_update.pack(side=tk.RIGHT)
 
-        # ---- 第 7 行：日志框 ----
-        log_frame = ttk.LabelFrame(frame, text="下载日志", padding=4)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        # ---- 下载日志卡片 ----
+        log_card = make_card(outer, pad=(14, 12, 14, 12))
+        card_title(log_card, "下载日志")
+        log_inner = ttk.Frame(log_card, style="Card.TFrame")
+        log_inner.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
         self.log_text = tk.Text(
-            log_frame, height=8, state=tk.DISABLED,
-            wrap=tk.WORD, font=("Consolas", 9),
+            log_inner, height=7, state=tk.DISABLED, wrap=tk.WORD, font=FONT_MONO,
+            bg=COLORS["log_bg"], fg=COLORS["text"], relief=tk.FLAT, bd=0,
+            highlightbackground=COLORS["border"], highlightcolor=COLORS["border"],
+            highlightthickness=1, padx=8, pady=6,
         )
         log_scrollbar = ttk.Scrollbar(
-            log_frame, orient=tk.VERTICAL, command=self.log_text.yview,
+            log_inner, orient=tk.VERTICAL, command=self.log_text.yview,
         )
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
+
+        # 日志级别配色
+        self.log_text.tag_configure("info", foreground=COLORS["muted"])
+        self.log_text.tag_configure("ok", foreground=COLORS["success"])
+        self.log_text.tag_configure("err", foreground=COLORS["error"])
+        self.log_text.tag_configure("warn", foreground=COLORS["warn"])
 
     # --------------- 代理标签 ---------------
     @staticmethod
@@ -947,6 +1341,7 @@ class App(tk.Tk):
         self.config["proxy_mode"] = self._proxy_raw_from_label(self.proxy_mode_var.get())
         self.config["default_format"] = self.format_var.get()
         self.config["default_quality"] = self.quality_var.get()
+        save_config(self.config)
 
     # --------------- 开始下载 ---------------
     def _start_download(self):
@@ -966,8 +1361,10 @@ class App(tk.Tk):
         # 构建输出路径 — 先用日期文件夹 + 临时名，获取标题后更新
         folder_name, target_dir = get_today_folder(self.config["save_dir"])
         ensure_dir(target_dir)
-        self._download_target_dir = target_dir
-        tmp_ext = self.config.get("default_format", "mp4")
+        tmp_ext = output_ext(
+            self.config.get("default_format", "mp4"),
+            self.config.get("default_quality", "best"),
+        )
         output_path = get_next_filepath(target_dir, folder_name, ext=tmp_ext)
 
         # 查找 FFmpeg
@@ -980,7 +1377,7 @@ class App(tk.Tk):
         self.btn_stop.config(state=tk.NORMAL)
         self.progress_var.set(0.0)
         self.lbl_percent.config(text="0.0%")
-        self.lbl_info.config(text="正在获取视频信息...")
+        self.lbl_info.config(text="正在获取视频信息...", style="Info.TLabel")
 
         self._dl = Downloader(
             url=url,
@@ -991,6 +1388,7 @@ class App(tk.Tk):
             progress_cb=self._on_progress,
             done_cb=self._on_done,
             log_cb=self._log,
+            error_cb=self._on_error_report,
         )
         self._thread = threading.Thread(target=self._dl.run, daemon=True)
         self._thread.start()
@@ -1015,17 +1413,11 @@ class App(tk.Tk):
             f"标题：{title}  |  上传者：{uploader}  |  时长：{duration_str}\n"
             f"分辨率：{resolution}  |  平台：{platform}"
         )
-        self.lbl_info.config(text=text)
+        self.lbl_info.config(text=text, style="Info.TLabel")
 
-        # 用视频标题重建输出路径
+        # 文件名已由 Downloader.run() 在下载前同步更新，这里仅记录
         if self._dl and info.get("title"):
-            safe_title = re.sub(r'[\\/:*?"<>|]', '_', info["title"]).strip()
-            if safe_title and self._download_target_dir:
-                fmt = self.config.get("default_format", "mp4")
-                ext = "mp3" if fmt == "mp3" else fmt
-                new_path = get_next_filepath(self._download_target_dir, safe_title, ext=ext)
-                self._dl.output_path = new_path
-                self._log(f"[信息] 文件：{os.path.basename(new_path)}")
+            self._log(f"[信息] 文件：{os.path.basename(self._dl.output_path)}")
 
     # --------------- 进度回调 ---------------
     def _on_progress(self, pct: float):
@@ -1034,6 +1426,11 @@ class App(tk.Tk):
     def _update_progress_ui(self, pct: float):
         self.progress_var.set(pct)
         self.lbl_percent.config(text=f"{pct:.1f}%")
+
+    # --------------- 错误报告回调 ---------------
+    def _on_error_report(self, report: dict):
+        """下载失败时弹出诊断报告对话框。"""
+        self.after(0, lambda: ErrorReportDialog(self, report))
 
     # --------------- 完成回调 ---------------
     def _on_done(self, ok: bool, msg: str):

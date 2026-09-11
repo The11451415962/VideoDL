@@ -1,6 +1,10 @@
 # VideoDL 依赖
 
-# 本项目使用 Python 标准库（tkinter / json / os / re / subprocess / threading / shutil），无需额外 pip 包。
+# 默认（tkinter 版，video_downloader.py）使用 Python 标准库，无需额外 pip 包。
+
+# 可选：Windows 11 Fluent 版（video_downloader_qt.py）需要 PySide6
+#   安装：pip install PySide6
+#   运行：python video_downloader_qt.py
 
 # 外部可执行文件（需自行下载）：
 #   yt-dlp.exe  → https://github.com/yt-dlp/yt-dlp/releases
