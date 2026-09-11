@@ -21,13 +21,19 @@ class NamingTest {
 class FileRepositoryPureTest {
     @Test fun buildOutputPath_firstNoSuffix() {
         val dir = createTempDir().absolutePath
-        val c = AppConfig(defaultFormat = "mp4")
-        assertEquals("$dir/视频.mp4", FileRepository.buildOutputPath(dir, c, "https://x.com/视频"))
+        assertEquals("$dir/视频.mp4", FileRepository.buildOutputPath(dir, "视频", "mp4", "best"))
     }
     @Test fun buildOutputPath_conflictAddsSuffix() {
         val dir = createTempDir()
         dir.resolve("title.mp4").createNewFile()
-        val c = AppConfig(defaultFormat = "mp4")
-        assertEquals("${dir.absolutePath}/title(2).mp4", FileRepository.buildOutputPath(dir.absolutePath, c, "https://x.com/title"))
+        assertEquals("${dir.absolutePath}/title(2).mp4", FileRepository.buildOutputPath(dir.absolutePath, "title", "mp4", "best"))
+    }
+    @Test fun buildOutputPath_audioQualityForcesMp3() {
+        val dir = createTempDir().absolutePath
+        assertEquals("$dir/title.mp3", FileRepository.buildOutputPath(dir, "title", "mp4", "audio"))
+    }
+    @Test fun buildOutputPath_sanitizesTitle() {
+        val dir = createTempDir().absolutePath
+        assertEquals("$dir/a_b_c_d.mp4", FileRepository.buildOutputPath(dir, "a/b\\c:d", "mp4", "best"))
     }
 }

@@ -64,7 +64,7 @@ class DownloadService : Service() {
         val engine = (application as MainApplication).engine
         val config = runBlocking { ConfigRepositoryImpl(this@DownloadService).configFlow.first() }
         val baseDir = FileRepository.resolveBaseDir(this, config)
-        val outputPath = FileRepository.buildOutputPath(baseDir, config, url)
+        val outputPath = FileRepository.buildOutputPath(baseDir, "video", config.defaultFormat, config.defaultQuality)
         val options = DownloadOptions(
             url = url, outputPath = outputPath,
             proxyMode = config.proxyMode, proxyUrl = config.proxyUrl,

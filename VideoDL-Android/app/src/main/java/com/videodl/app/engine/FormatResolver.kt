@@ -35,10 +35,11 @@ object Format {
                 }
                 listOf("-f", sel, "--merge-output-format", "webm")
             } else {
+                // 强制 H.264(avc1) 视频 + AAC(mp4a) 音频，手机相册/编辑器最通用
                 val sel = when (quality) {
-                    "1080p" -> "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]"
-                    "720p" -> "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]"
-                    else -> "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+                    "1080p" -> "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=1080][vcodec^=avc1]"
+                    "720p" -> "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=720][vcodec^=avc1]"
+                    else -> "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best"
                 }
                 listOf("-f", sel, "--merge-output-format", "mp4")
             }
