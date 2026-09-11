@@ -3,11 +3,14 @@
 """
 视频下载器 —— Windows 11 Fluent Design（PySide6）版本
 ====================================================
-基于 yt-dlp + PySide6，界面采用 Windows 11 流畅设计：
-  · 背景半透明磨砂玻璃（Windows 11 Mica / Windows 10 Acrylic）
-  · 主色高饱和科技蓝，卡片为半透明白底 + 8~12px 圆角
-  · 统一 20px 外边距、卡片 100% 等宽对齐
-  · 下拉框/输入框/按钮全部自定义 QSS，摒弃原生灰框
+基于 yt-dlp + PySide6，界面按 Windows 11 设计语言实现：
+  · 页面背景用系统磨砂（Mica / Acrylic），卡片是不透明的 Layer 面，
+    磨砂只在留白处透出来 —— 保证文字对比度，不会糊成一片灰
+  · 统一 8pt 间距栅格、8px 卡片圆角、36px 控件高度
+  · 强调色只用于主按钮 / 焦点 / 进度条
+  · 下拉框显示中文标签，落盘仍是 config.json 的原始值
+  · 内容放在滚动容器里：窗口拉小改为滚动，不会把卡片压扁裁切
+  · 日志区是主视觉之一，最小高度受保护，不再被挤成一条缝
 
 运行：
   pip install PySide6
@@ -22,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from datetime import datetime
 
 
@@ -65,35 +69,53 @@ def _bootstrap_pyside6() -> None:
 
 _bootstrap_pyside6()
 
-from PySide6.QtCore import Qt, QObject, Signal, QUrl
-from PySide6.QtGui import (QColor, QIcon, QPainter, QPen, QPixmap,
+from PySide6.QtCore import Qt, QObject, QPointF, QRectF, QSize, Signal, QUrl
+from PySide6.QtGui import (QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF,
                            QPalette, QTextCursor, QTextCharFormat)
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QGridLayout, QLabel, QLineEdit,
                                QPushButton, QComboBox, QProgressBar, QTextEdit,
-                               QFrame, QSizePolicy, QFileDialog, QMessageBox)
+                               QFrame, QFileDialog, QMessageBox,
+                               QGraphicsDropShadowEffect, QScrollArea)
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 
 import video_downloader as core  # 复用 yt-dlp 后端逻辑
 
 
 # ============================================================
-# 配色常量（Fluent / 科技蓝）
+# 设计令牌（Windows 11 Fluent：Mica 页面 + 不透明 Layer 卡片）
+# ------------------------------------------------------------
+# 关键点：只有"页面背景"透出 Mica，所有卡片/输入框都是不透明面，
+#         这样文字才有足够对比度，不会变成一层灰糊糊的半透明叠加。
 # ============================================================
-ACCENT = "#2D7DFF"          # 高饱和科技蓝（主色）
+ACCENT = "#2D7DFF"          # 强调色（主按钮 / 焦点 / 进度条）
 ACCENT_HOVER = "#1E6BEF"
 ACCENT_PRESSED = "#155AD6"
-TEXT_MAIN = "#1B2733"       # 主文字
-TEXT_MUTED = "#5A6B7B"      # 次要文字
-LOG_BG = "rgba(255, 255, 255, 0.55)"   # 日志浅色半透明（对应参考图）
-LOG_TEXT = "#1B2733"
-CARD_BG = "rgba(255, 255, 255, 0.55)"  # 卡片半透明白
-CARD_BORDER = "rgba(255, 255, 255, 0.6)"
-INPUT_BG = "rgba(255, 255, 255, 0.60)"
 
-# 日志级别 → 颜色（浅色底）
-LOG_COLORS = {"info": "#6B7A8D", "ok": "#1F9D55",
-              "err": "#D64545", "warn": "#C77D0A"}
+TEXT_MAIN = "#1B1F24"       # 标题
+TEXT_BODY = "#3C4753"       # 正文
+TEXT_MUTED = "#6B7684"      # 次要文字 / 字段标签
+TEXT_FAINT = "#9AA4B2"      # 占位符 / 禁用
+
+SURFACE = "#FFFFFF"         # 卡片面（Layer）
+SURFACE_ALT = "#F4F6FA"     # 输入框 / 次级面板
+SURFACE_HOVER = "#EBF0F7"
+BORDER = "#E3E7ED"
+BORDER_STRONG = "#CFD6E0"
+PAGE_FALLBACK = "#EEF2F8"   # 磨砂不可用时的页面底色
+
+LOG_BG = "#F7F9FC"          # 日志面板底
+LOG_TEXT = "#3C4753"
+
+# 日志级别 → 颜色
+LOG_COLORS = {"info": "#5A6675", "ok": "#12794A",
+              "err": "#C0362C", "warn": "#9A6200"}
+
+# 下拉框选项：显示中文标签，内部仍存 config.json 里的原始值
+FORMAT_ITEMS = [("MP4", "mp4"), ("WebM", "webm"), ("MP3（仅音频）", "mp3")]
+QUALITY_ITEMS = [("最佳画质", "best"), ("1080P", "1080p"),
+                 ("720P", "720p"), ("仅音频", "audio")]
+PROXY_ITEMS = [("自动", "auto"), ("直连", "direct"), ("强制代理", "proxy")]
 
 # yt-dlp 输出中解析下载速度 / ETA
 SPEED_RE = re.compile(r"at\s+([0-9.]+[KMG]?i?B/s)")
@@ -177,9 +199,12 @@ def _make_down_arrow() -> str:
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(QPen(QColor(TEXT_MUTED), 2))
-    p.drawLine(7, 10, 12, 15)
-    p.drawLine(12, 15, 17, 10)
+    pen = QPen(QColor(TEXT_MUTED), 1.8)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    p.drawLine(QPointF(8.5, 10.5), QPointF(12, 14))
+    p.drawLine(QPointF(12, 14), QPointF(15.5, 10.5))
     p.end()
     path = os.path.join(tempfile.gettempdir(), "videodl_down_arrow.png")
     pm.save(path, "PNG")
@@ -187,18 +212,44 @@ def _make_down_arrow() -> str:
 
 
 def _make_link_icon() -> QIcon:
-    """生成链接图标（输入框左侧 Leading 图标）。"""
-    pm = QPixmap(24, 24)
+    """生成链接图标（输入框左侧 Leading 图标）：两个斜置链环，描边风格。"""
+    pm = QPixmap(20, 20)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(ACCENT))
-    # 两个交叠圆角矩形，模拟"链环"
-    p.drawRoundedRect(2, 8, 12, 8, 4, 4)
-    p.drawRoundedRect(10, 8, 12, 8, 4, 4)
+    pen = QPen(QColor(TEXT_MUTED), 1.7)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    p.translate(10, 10)
+    p.rotate(-45)
+    p.drawRoundedRect(QRectF(-7.2, -3.0, 8.6, 6.0), 3.0, 3.0)
+    p.drawRoundedRect(QRectF(-1.4, -3.0, 8.6, 6.0), 3.0, 3.0)
     p.end()
     return QIcon(pm)
+
+
+def _make_thumb_placeholder(w: int, h: int) -> QPixmap:
+    """生成封面占位图（透明的圆角播放标记 + 中文说明），替代英文占位文本。"""
+    pm = QPixmap(w, h)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    cx, cy = w / 2.0, h / 2.0 - 8
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(138, 148, 162, 38))
+    p.drawEllipse(QPointF(cx, cy), 19, 19)
+    p.setBrush(QColor(TEXT_FAINT))
+    p.drawPolygon(QPolygonF([QPointF(cx - 4.5, cy - 8),
+                             QPointF(cx - 4.5, cy + 8),
+                             QPointF(cx + 9.0, cy)]))
+    f = p.font()
+    f.setPointSize(9)
+    p.setFont(f)
+    p.setPen(QPen(QColor(TEXT_FAINT)))
+    p.drawText(QRectF(0, cy + 26, w, 20), Qt.AlignHCenter | Qt.AlignTop, "等待视频信息")
+    p.end()
+    return pm
 
 
 def _make_app_icon() -> QIcon:
@@ -225,6 +276,51 @@ def _make_app_icon() -> QIcon:
 
 
 # ============================================================
+# 卡片 / 按钮工厂
+# ============================================================
+def _add_card_shadow(widget: QWidget, blur: int = 16, alpha: int = 22) -> None:
+    """给卡片压一层极淡的投影，形成 Fluent 的 Layer 层次感。"""
+    eff = QGraphicsDropShadowEffect(widget)
+    eff.setBlurRadius(blur)
+    eff.setOffset(0, 2)
+    eff.setColor(QColor(15, 23, 42, alpha))
+    widget.setGraphicsEffect(eff)
+
+
+def _make_card() -> QFrame:
+    card = QFrame()
+    card.setObjectName("card")
+    _add_card_shadow(card)
+    return card
+
+
+def _make_button(text: str, obj: str = "secondary", height: int = 36,
+                 width: int = 0, on_click=None) -> QPushButton:
+    """统一高度/手型的按钮工厂，保证一行里的按钮永远对齐。"""
+    btn = QPushButton(text)
+    btn.setObjectName(obj)
+    btn.setFixedHeight(height)
+    if width:
+        btn.setFixedWidth(width)
+    btn.setCursor(Qt.PointingHandCursor)
+    if on_click is not None:
+        btn.clicked.connect(on_click)
+    return btn
+
+
+# ============================================================
+# 日志视图：压小默认 sizeHint
+# ------------------------------------------------------------
+# QTextEdit 默认 sizeHint 高 192px，放进滚动容器会把内容顶高、
+# 导致常规窗口尺寸下就常驻一根滚动条；这里压到 96px。
+# ============================================================
+class _LogView(QTextEdit):
+    def sizeHint(self) -> QSize:  # noqa: N802 (Qt 命名)
+        s = super().sizeHint()
+        return QSize(s.width(), 96)
+
+
+# ============================================================
 # 下载线程 → Qt 信号桥（跨线程安全）
 # ============================================================
 class DownloadSignals(QObject):
@@ -233,6 +329,7 @@ class DownloadSignals(QObject):
     done = Signal(bool, str)
     log = Signal(str)
     error = Signal(dict)
+    core_update = Signal(str)   # "更新核心" 在工作线程跑，结果必须回主线程更新界面
 
 
 # ============================================================
@@ -243,8 +340,8 @@ class VideoDownloaderWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("视频下载器")
         self.setWindowIcon(_make_app_icon())
-        self.setMinimumSize(860, 620)
-        self.resize(920, 760)
+        self.setMinimumSize(820, 640)
+        self._apply_initial_geometry()
 
         self.config = core.load_config()
         core.ensure_dir(self.config["save_dir"])
@@ -255,6 +352,7 @@ class VideoDownloaderWindow(QMainWindow):
         self.sig.done.connect(self._on_done)
         self.sig.log.connect(self._append_log)
         self.sig.error.connect(self._on_error)
+        self.sig.core_update.connect(self._on_update_done)
 
         self._dl = None
         self._thread = None
@@ -263,7 +361,7 @@ class VideoDownloaderWindow(QMainWindow):
         # 磨砂背景（失败时回退为浅色不透明底，保证不透明黑块）
         if not enable_frosted(self):
             pal = self.palette()
-            pal.setColor(QPalette.Window, QColor("#EDF2F9"))
+            pal.setColor(QPalette.Window, QColor(PAGE_FALLBACK))
             self.setPalette(pal)
 
         self._build_ui()
@@ -272,14 +370,27 @@ class VideoDownloaderWindow(QMainWindow):
         # 启动后检查依赖
         self._startup_check()
 
+    def _apply_initial_geometry(self):
+        """初始尺寸按屏幕可用区域自适应：1366x768 上也不顶到任务栏、不压扁日志区。"""
+        w, h = 900, 760
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            w = max(820, min(w, avail.width() - 80))
+            h = max(640, min(h, avail.height() - 70))
+            self.resize(w, h)
+            self.move(avail.center().x() - w // 2,
+                      max(avail.top() + 16, avail.center().y() - h // 2))
+        else:
+            self.resize(w, h)
+
     # ---------------- UI 构建 ----------------
     def _build_ui(self):
         root = QWidget()
         root.setObjectName("root")
-        self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(20, 20, 20, 20)
-        outer.setSpacing(14)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(10)
 
         outer.addLayout(self._build_header())
         outer.addWidget(self._build_link_card())
@@ -288,22 +399,42 @@ class VideoDownloaderWindow(QMainWindow):
         outer.addLayout(self._build_buttons())
         outer.addWidget(self._build_log_card(), 1)
 
+        # 放进滚动容器：窗口被拉小/屏幕矮时改为滚动，而不是把卡片压扁裁切
+        area = QScrollArea()
+        area.setObjectName("scrollArea")
+        area.setFrameShape(QFrame.NoFrame)
+        area.setWidgetResizable(True)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        area.viewport().setObjectName("pageViewport")
+        area.setWidget(root)
+        self.setCentralWidget(area)
+
     def _build_header(self):
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
         box = QVBoxLayout()
-        box.setSpacing(2)
+        box.setSpacing(1)
         title = QLabel("视频下载器")
         title.setObjectName("appTitle")
-        sub = QLabel("现代化设计 · 功能集中 · 一目了然")
+        sub = QLabel("yt-dlp 驱动 · 支持 YouTube / B站 / 抖音 等站点")
         sub.setObjectName("appSubtitle")
         box.addWidget(title)
         box.addWidget(sub)
-        return box
+        row.addLayout(box)
+        row.addStretch(1)
+
+        # 低频操作收到标题行右上角，把主视觉让给下载按钮
+        self.btn_update = _make_button("更新核心", "ghost", 32, on_click=self._update_core)
+        self.btn_settings = _make_button("设置", "ghost", 32, on_click=self._open_settings)
+        row.addWidget(self.btn_update, 0, Qt.AlignBottom)
+        row.addWidget(self.btn_settings, 0, Qt.AlignBottom)
+        return row
 
     def _build_link_card(self):
-        card = QFrame()
-        card.setObjectName("card")
+        card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(8)
 
         row = QHBoxLayout()
@@ -311,88 +442,82 @@ class VideoDownloaderWindow(QMainWindow):
         self.url_edit = QLineEdit()
         self.url_edit.setObjectName("urlEdit")
         self.url_edit.setPlaceholderText("粘贴视频链接，例如 https://www.bilibili.com/video/BV...")
+        self.url_edit.setFixedHeight(36)
         self.url_edit.addAction(_make_link_icon(), QLineEdit.LeadingPosition)
         self.url_edit.returnPressed.connect(self._start_download)
         row.addWidget(self.url_edit, 1)
 
-        self.btn_paste = QPushButton("一键粘贴")
-        self.btn_paste.setObjectName("secondary")
-        self.btn_paste.setFixedHeight(38)
-        self.btn_paste.setCursor(Qt.PointingHandCursor)
-        self.btn_paste.clicked.connect(self._paste_from_clipboard)
+        self.btn_paste = _make_button("一键粘贴", "secondary", 36, 92,
+                                      self._paste_from_clipboard)
         row.addWidget(self.btn_paste)
 
         lay.addLayout(row)
         return card
 
     def _build_config_card(self):
-        card = QFrame()
-        card.setObjectName("card")
+        card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 14, 18, 14)
-        lay.setSpacing(14)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
 
-        # 第一行：保存路径 + 更改路径
+        # 保存路径
         path_row = QHBoxLayout()
         path_row.setSpacing(8)
-        path_label = QLabel("保存路径")
-        path_label.setObjectName("fieldLabel")
-        path_row.addWidget(path_label)
-
+        path_row.setContentsMargins(0, 0, 0, 0)
         self.path_edit = QLineEdit(self.config["save_dir"])
         self.path_edit.setObjectName("pathEdit")
         self.path_edit.setReadOnly(True)
+        self.path_edit.setFixedHeight(36)
+        self.path_edit.setToolTip(self.config["save_dir"])
         path_row.addWidget(self.path_edit, 1)
 
-        self.btn_change_path = QPushButton("更改路径")
-        self.btn_change_path.setObjectName("secondary")
-        self.btn_change_path.setFixedHeight(38)
-        self.btn_change_path.setCursor(Qt.PointingHandCursor)
-        self.btn_change_path.clicked.connect(self._change_save_dir)
+        self.btn_change_path = _make_button("更改路径", "secondary", 36, 92,
+                                            self._change_save_dir)
         path_row.addWidget(self.btn_change_path)
-        lay.addLayout(path_row)
+        lay.addWidget(self._make_field_row("保存路径", path_row))
 
-        # 第二行：格式 / 清晰度 / 网络代理（三等分）
+        # 格式 / 清晰度 / 网络代理（三等分）
+        self.cb_format = self._make_combo(FORMAT_ITEMS,
+                                         self.config.get("default_format", "mp4"))
+        self.cb_quality = self._make_combo(QUALITY_ITEMS,
+                                           self.config.get("default_quality", "best"))
+        self.cb_proxy = self._make_combo(PROXY_ITEMS,
+                                         self.config.get("proxy_mode", "auto"))
+
         grid = QGridLayout()
-        grid.setSpacing(12)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-
-        self.cb_format = self._make_combo(
-            ["mp4", "webm", "mp3"],
-            self.config.get("default_format", "mp4"))
-        self.cb_quality = self._make_combo(
-            ["best", "1080p", "720p", "audio"],
-            self.config.get("default_quality", "best"))
-        self.cb_proxy = self._make_combo(
-            ["auto (自动)", "direct (直连)", "proxy (代理)"],
-            core.App._label_for_proxy_mode(self.config.get("proxy_mode", "auto")))
-
+        grid.setSpacing(10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        for col in range(3):
+            grid.setColumnStretch(col, 1)
         grid.addWidget(self._make_field("格式", self.cb_format), 0, 0)
         grid.addWidget(self._make_field("清晰度", self.cb_quality), 0, 1)
         grid.addWidget(self._make_field("网络代理", self.cb_proxy), 0, 2)
         lay.addLayout(grid)
 
         # 选择变化即时持久化
-        self.cb_format.currentTextChanged.connect(self._sync_ui_to_config)
-        self.cb_quality.currentTextChanged.connect(self._sync_ui_to_config)
-        self.cb_proxy.currentTextChanged.connect(self._sync_ui_to_config)
+        self.cb_format.currentIndexChanged.connect(self._sync_ui_to_config)
+        self.cb_quality.currentIndexChanged.connect(self._sync_ui_to_config)
+        self.cb_proxy.currentIndexChanged.connect(self._sync_ui_to_config)
         return card
 
     @staticmethod
-    def _make_combo(values, current):
+    def _make_combo(items, current):
+        """items = [(显示标签, 原始值)]；显示中文，内部仍存 config.json 的原始值。"""
         cb = QComboBox()
         cb.setObjectName("combo")
-        cb.addItems(values)
-        cb.setCurrentText(current)
+        for label, value in items:
+            cb.addItem(label, value)
+        idx = cb.findData(current)
+        cb.setCurrentIndex(idx if idx >= 0 else 0)
+        cb.setFixedHeight(36)
         cb.setCursor(Qt.PointingHandCursor)
         return cb
 
     @staticmethod
     def _make_field(label, widget):
         box = QVBoxLayout()
-        box.setSpacing(6)
+        box.setSpacing(4)
+        box.setContentsMargins(0, 0, 0, 0)
         lbl = QLabel(label)
         lbl.setObjectName("fieldLabel")
         box.addWidget(lbl)
@@ -402,27 +527,36 @@ class VideoDownloaderWindow(QMainWindow):
         wrap.setLayout(box)
         return wrap
 
+    @classmethod
+    def _make_field_row(cls, label, row_layout):
+        """字段标签 + 一整行（输入框 + 按钮）的组合。"""
+        holder = QWidget()
+        holder.setObjectName("fieldWrap")
+        holder.setLayout(row_layout)
+        return cls._make_field(label, holder)
+
     def _build_preview_card(self):
-        card = QFrame()
-        card.setObjectName("card")
+        card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 14, 18, 14)
-        lay.setSpacing(14)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
 
         top = QHBoxLayout()
-        top.setSpacing(16)
+        top.setSpacing(14)
 
-        # 缩略图占位（16:9，圆角）
-        self.thumb = QLabel("[Video Thumbnail Placeholder]")
+        # 缩略图（16:9，圆角；无信息时显示占位图而不是英文占位文本）
+        self.thumb = QLabel()
         self.thumb.setObjectName("thumb")
         self.thumb.setAlignment(Qt.AlignCenter)
-        self.thumb.setFixedSize(320, 180)
+        self.thumb.setFixedSize(208, 117)
+        self.thumb.setPixmap(_make_thumb_placeholder(206, 115))
         top.addWidget(self.thumb)
 
-        # 右侧信息：视频标题 / 时长 / 预计大小（标签 + 值）
+        # 右侧信息：标题 / 时长 / 大小 / 附加信息
         info = QVBoxLayout()
-        info.setSpacing(8)
-        self.info_title = QLabel("视频标题：等待粘贴链接...")
+        info.setSpacing(4)
+        info.setContentsMargins(0, 2, 0, 2)
+        self.info_title = QLabel("等待粘贴链接…")
         self.info_title.setObjectName("infoTitle")
         self.info_title.setWordWrap(True)
         info.addWidget(self.info_title)
@@ -435,219 +569,251 @@ class VideoDownloaderWindow(QMainWindow):
         self.info_size.setObjectName("infoMeta")
         info.addWidget(self.info_size)
 
-        # 附加信息（分辨率 / 平台 / 上传者，次要灰字）
         self.info_extra = QLabel("")
         self.info_extra.setObjectName("infoMeta")
+        self.info_extra.setWordWrap(True)
         info.addWidget(self.info_extra)
         info.addStretch(1)
         top.addLayout(info, 1)
         lay.addLayout(top)
 
-        # 进度条 + 右侧百分比
+        # 进度条 + 右侧百分比（固定宽度，避免数字变化时左右抖动）
         prog_row = QHBoxLayout()
-        prog_row.setSpacing(12)
+        prog_row.setSpacing(10)
         self.progress = QProgressBar()
         self.progress.setObjectName("progress")
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setFixedHeight(10)
+        self.progress.setFixedHeight(6)
         self.progress.setTextVisible(False)
         prog_row.addWidget(self.progress, 1)
         self.percent_label = QLabel("0.0%")
-        self.percent_label.setObjectName("statusText")
+        self.percent_label.setObjectName("percentText")
+        self.percent_label.setFixedWidth(54)
+        self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         prog_row.addWidget(self.percent_label)
         lay.addLayout(prog_row)
 
-        # 状态栏（对应参考图：正在等待粘贴链接... (0 KB/s - 剩余: --:--)）
-        self.status_label = QLabel("正在等待粘贴链接... (0 KB/s - 剩余: --:--)")
+        # 状态行
+        self.status_label = QLabel("就绪 · 等待链接")
         self.status_label.setObjectName("statusText")
         lay.addWidget(self.status_label)
         return card
 
     def _build_buttons(self):
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(8)
 
-        self.btn_download = QPushButton("开始下载")
-        self.btn_download.setObjectName("primary")
-        self.btn_download.setFixedHeight(38)
-        self.btn_download.setCursor(Qt.PointingHandCursor)
-        self.btn_download.clicked.connect(self._start_download)
+        self.btn_download = _make_button("开始下载", "primary", 36, 112,
+                                         self._start_download)
         row.addWidget(self.btn_download)
 
-        self.btn_stop = QPushButton("停止下载")
-        self.btn_stop.setObjectName("secondary")
-        self.btn_stop.setFixedHeight(38)
-        self.btn_stop.setCursor(Qt.PointingHandCursor)
+        self.btn_stop = _make_button("停止下载", "secondary", 36, 96,
+                                     self._stop_download)
         self.btn_stop.setEnabled(False)
-        self.btn_stop.clicked.connect(self._stop_download)
         row.addWidget(self.btn_stop)
-
-        self.btn_open = QPushButton("打开目录")
-        self.btn_open.setObjectName("secondary")
-        self.btn_open.setFixedHeight(38)
-        self.btn_open.setCursor(Qt.PointingHandCursor)
-        self.btn_open.clicked.connect(self._open_today_folder)
-        row.addWidget(self.btn_open)
-
-        self.btn_settings = QPushButton("设置")
-        self.btn_settings.setObjectName("secondary")
-        self.btn_settings.setFixedHeight(38)
-        self.btn_settings.setCursor(Qt.PointingHandCursor)
-        self.btn_settings.clicked.connect(self._open_settings)
-        row.addWidget(self.btn_settings)
 
         row.addStretch(1)
 
-        self.btn_update = QPushButton("更新核心")
-        self.btn_update.setObjectName("linkBtn")
-        self.btn_update.setCursor(Qt.PointingHandCursor)
-        self.btn_update.clicked.connect(self._update_core)
-        row.addWidget(self.btn_update)
+        self.btn_open = _make_button("打开目录", "secondary", 36, 92,
+                                     self._open_today_folder)
+        row.addWidget(self.btn_open)
         return row
 
     def _build_log_card(self):
-        self.log_edit = QTextEdit()
+        card = _make_card()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 12)
+        lay.setSpacing(8)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.setContentsMargins(2, 0, 0, 0)
+        head_title = QLabel("下载日志")
+        head_title.setObjectName("cardTitle")
+        head.addWidget(head_title)
+        head.addStretch(1)
+        self.btn_clear_log = _make_button("清空", "ghost", 24, 48, self._clear_log)
+        head.addWidget(self.btn_clear_log)
+        lay.addLayout(head)
+
+        self.log_edit = _LogView()
         self.log_edit.setObjectName("logEdit")
         self.log_edit.setReadOnly(True)
-        return self.log_edit
+        self.log_edit.setMinimumHeight(96)
+        lay.addWidget(self.log_edit, 1)
+        return card
+
+    def _clear_log(self):
+        self.log_edit.clear()
 
     # ---------------- QSS ----------------
     def _apply_stylesheet(self):
         arrow = _make_down_arrow()
         self.setStyleSheet(f"""
-            * {{ font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }}
+            * {{ font-family: "Segoe UI Variable Text", "Segoe UI",
+                             "Microsoft YaHei UI", sans-serif; }}
 
+            /* 页面背景保持透明，让系统 Mica/Acrylic 透出来；
+               卡片一律不透明，避免半透明白叠半透明白糊成一片灰。 */
             QWidget#root {{ background: transparent; }}
+            QScrollArea#scrollArea {{ background: transparent; border: none; }}
+            QWidget#pageViewport {{ background: transparent; }}
 
-            QLabel {{ color: {TEXT_MAIN}; background: transparent; }}
-            #appTitle {{ font-size: 22px; font-weight: 700; }}
+            QLabel {{ color: {TEXT_BODY}; background: transparent; }}
+            #appTitle {{ font-size: 20px; font-weight: 600; color: {TEXT_MAIN}; }}
             #appSubtitle {{ font-size: 12px; color: {TEXT_MUTED}; }}
 
             #card {{
-                background-color: {CARD_BG};
-                border: 1px solid {CARD_BORDER};
-                border-radius: 12px;
+                background-color: {SURFACE};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
+            }}
+            #cardTitle {{ font-size: 13px; font-weight: 600; color: {TEXT_MAIN}; }}
+            #fieldLabel {{ font-size: 12px; color: {TEXT_MUTED}; }}
+
+            QToolTip {{
+                background-color: {SURFACE};
+                color: {TEXT_MAIN};
+                border: 1px solid {BORDER};
+                padding: 4px 8px;
+                border-radius: 4px;
             }}
 
-            #fieldLabel {{ font-size: 12px; font-weight: 600; color: {TEXT_MUTED}; }}
-
-            /* ---- 输入框 ---- */
-            QLineEdit {{
-                background-color: {INPUT_BG};
-                border: 1px solid rgba(120, 140, 165, 0.35);
-                border-radius: 8px;
-                padding: 8px 12px;
+            /* ---- 输入框 / 下拉框（同高度、同圆角） ---- */
+            QLineEdit, QComboBox {{
+                background-color: {SURFACE_ALT};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 0 10px;
                 color: {TEXT_MAIN};
-                selection-background-color: {ACCENT};
-            }}
-            QLineEdit:focus {{ border: 1px solid {ACCENT}; background-color: rgba(255,255,255,0.85); }}
-            QLineEdit[readOnly="true"] {{ background-color: rgba(255,255,255,0.35); color: {TEXT_MUTED}; }}
-
-            /* ---- 下拉框（自定义，摒弃原生灰框） ---- */
-            QComboBox {{
-                background-color: {INPUT_BG};
-                border: 1px solid rgba(120, 140, 165, 0.35);
-                border-radius: 8px;
-                padding: 6px 12px;
-                color: {TEXT_MAIN};
-                min-height: 24px;
-            }}
-            QComboBox:hover {{ border: 1px solid {ACCENT}; }}
-            QComboBox:focus {{ border: 1px solid {ACCENT}; background-color: rgba(255,255,255,0.85); }}
-            QComboBox::drop-down {{ border: none; width: 28px; }}
-            QComboBox::down-arrow {{ image: url({arrow}); width: 14px; height: 14px; }}
-            QComboBox QAbstractItemView {{
-                background-color: rgba(255, 255, 255, 0.96);
-                border: 1px solid rgba(120, 140, 165, 0.3);
-                border-radius: 8px;
-                color: {TEXT_MAIN};
-                outline: none;
+                font-size: 13px;
                 selection-background-color: {ACCENT};
                 selection-color: #ffffff;
-                padding: 4px;
             }}
+            QLineEdit:hover, QComboBox:hover {{ background-color: {SURFACE_HOVER}; }}
+            QLineEdit:focus, QComboBox:focus {{
+                background-color: {SURFACE};
+                border: 1px solid {ACCENT};
+            }}
+            QLineEdit[readOnly="true"] {{ background-color: {LOG_BG}; color: {TEXT_MUTED}; }}
+            QLineEdit[readOnly="true"]:hover {{ background-color: {LOG_BG}; }}
+            QLineEdit:disabled, QComboBox:disabled {{
+                color: {TEXT_FAINT};
+                background-color: {LOG_BG};
+                border: 1px solid {BORDER};
+            }}
+
+            QComboBox::drop-down {{ border: none; width: 26px; }}
+            QComboBox::down-arrow {{ image: url({arrow}); width: 14px; height: 14px; }}
+            QComboBox QAbstractItemView {{
+                background-color: {SURFACE};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 4px;
+                color: {TEXT_MAIN};
+                outline: none;
+                selection-background-color: #EAF1FE;
+                selection-color: {TEXT_MAIN};
+            }}
+            QComboBox QAbstractItemView::item {{ min-height: 28px; padding-left: 6px; }}
 
             /* ---- 按钮 ---- */
             QPushButton {{
-                background-color: rgba(255, 255, 255, 0.45);
+                background-color: {SURFACE};
                 color: {TEXT_MAIN};
-                border: 1px solid rgba(120, 140, 165, 0.30);
+                border: 1px solid {BORDER_STRONG};
                 border-radius: 6px;
-                padding: 0 16px;
-                font-weight: 600;
+                padding: 0 14px;
+                font-size: 13px;
+                font-weight: 500;
             }}
-            QPushButton:hover {{ background-color: rgba(255, 255, 255, 0.70); }}
-            QPushButton:pressed {{ background-color: rgba(255, 255, 255, 0.50); }}
-            QPushButton:disabled {{ color: rgba(27, 39, 51, 0.35); }}
+            QPushButton:hover {{ background-color: {SURFACE_ALT}; }}
+            QPushButton:pressed {{ background-color: {SURFACE_HOVER}; }}
+            QPushButton:disabled {{
+                color: {TEXT_FAINT};
+                border: 1px solid {BORDER};
+                background-color: {LOG_BG};
+            }}
 
             QPushButton#primary {{
                 background-color: {ACCENT};
+                border: 1px solid {ACCENT};
                 color: #ffffff;
-                border: none;
-            }}
-            QPushButton#primary:hover {{ background-color: {ACCENT_HOVER}; }}
-            QPushButton#primary:pressed {{ background-color: {ACCENT_PRESSED}; }}
-            QPushButton#primary:disabled {{ background-color: rgba(45, 125, 255, 0.4); color: rgba(255,255,255,0.8); }}
-
-            QPushButton#secondary {{ background-color: rgba(255, 255, 255, 0.45); }}
-            QPushButton#secondary:hover {{ background-color: rgba(255, 255, 255, 0.70); }}
-
-            QPushButton#linkBtn {{
-                background: transparent;
-                border: none;
-                color: {ACCENT};
                 font-weight: 600;
-                padding: 4px 8px;
             }}
-            QPushButton#linkBtn:hover {{ color: {ACCENT_HOVER}; text-decoration: underline; }}
+            QPushButton#primary:hover {{ background-color: {ACCENT_HOVER}; border-color: {ACCENT_HOVER}; }}
+            QPushButton#primary:pressed {{ background-color: {ACCENT_PRESSED}; border-color: {ACCENT_PRESSED}; }}
+            QPushButton#primary:disabled {{
+                background-color: #BFD5FF; border-color: #BFD5FF; color: #ffffff;
+            }}
+
+            QPushButton#ghost {{
+                background: transparent;
+                border: 1px solid transparent;
+                color: {TEXT_BODY};
+                padding: 0 10px;
+                font-weight: 500;
+            }}
+            QPushButton#ghost:hover {{ background-color: {SURFACE_HOVER}; }}
+            QPushButton#ghost:pressed {{ background-color: #DDE5F0; }}
+            QPushButton#ghost:disabled {{ color: {TEXT_FAINT}; background: transparent; }}
 
             /* ---- 进度条 ---- */
             QProgressBar {{
-                background-color: rgba(255, 255, 255, 0.5);
+                background-color: #E9EDF3;
                 border: none;
-                border-radius: 5px;
+                border-radius: 3px;
             }}
             QProgressBar::chunk {{
-                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                                  stop:0 {ACCENT}, stop:1 #6AA6FF);
-                border-radius: 5px;
+                background-color: {ACCENT};
+                border-radius: 3px;
             }}
 
-            /* ---- 缩略图占位 ---- */
+            /* ---- 缩略图 ---- */
             #thumb {{
-                background-color: rgba(255, 255, 255, 0.40);
-                border: 1px solid rgba(120, 140, 165, 0.3);
-                border-radius: 12px;
-                color: {TEXT_MUTED};
+                background-color: {SURFACE_ALT};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
             }}
 
             /* ---- 预览信息 ---- */
-            #infoTitle {{ font-size: 16px; font-weight: 700; }}
+            #infoTitle {{ font-size: 15px; font-weight: 600; color: {TEXT_MAIN}; }}
             #infoMeta {{ font-size: 12px; color: {TEXT_MUTED}; }}
-            #statusText {{ font-size: 12px; color: {TEXT_MUTED}; }}
+            #statusText {{ font-size: 12px; color: {TEXT_BODY}; }}
+            #percentText {{ font-size: 13px; font-weight: 600; color: {TEXT_MAIN}; }}
 
             /* ---- 日志 ---- */
             #logEdit {{
                 background-color: {LOG_BG};
                 color: {LOG_TEXT};
-                border: 1px solid rgba(120, 140, 165, 0.28);
-                border-radius: 10px;
-                padding: 8px;
-                font-family: "Consolas", "Courier New", monospace;
+                border: 1px solid #E9EDF3;
+                border-radius: 6px;
+                padding: 6px 8px;
+                font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
                 font-size: 12px;
                 selection-background-color: {ACCENT};
+                selection-color: #ffffff;
             }}
-            #logEdit:focus {{ border: 1px solid {ACCENT}; }}
+            #logEdit:focus {{ border: 1px solid {BORDER_STRONG}; }}
 
             QScrollBar:vertical {{
                 background: transparent; width: 10px; margin: 2px;
             }}
             QScrollBar::handle:vertical {{
-                background: rgba(120, 140, 165, 0.45); border-radius: 5px; min-height: 24px;
+                background: {BORDER_STRONG}; border-radius: 5px; min-height: 24px;
             }}
-            QScrollBar::handle:vertical:hover {{ background: rgba(120, 140, 165, 0.65); }}
+            QScrollBar::handle:vertical:hover {{ background: #AEB9C7; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+            QScrollBar:horizontal {{
+                background: transparent; height: 10px; margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {BORDER_STRONG}; border-radius: 5px; min-width: 24px;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
         """)
 
     # ---------------- 日志输出（按级别着色 + 解析速度） ----------------
@@ -673,9 +839,12 @@ class VideoDownloaderWindow(QMainWindow):
         m = SPEED_RE.search(msg)
         m2 = ETA_RE.search(msg)
         if m or m2:
-            speed = m.group(1) if m else "0 KB/s"
-            eta = m2.group(1) if m2 else "--:--"
-            self.status_label.setText(f"正在下载... ({speed} - 剩余: {eta})")
+            parts = []
+            if m:
+                parts.append(f"↓ {m.group(1)}")
+            if m2:
+                parts.append(f"剩余 {m2.group(1)}")
+            self.status_label.setText("下载中 · " + " · ".join(parts))
 
     # ---------------- 启动检查 ----------------
     def _startup_check(self):
@@ -693,9 +862,12 @@ class VideoDownloaderWindow(QMainWindow):
     # ---------------- 一键粘贴 ----------------
     def _paste_from_clipboard(self):
         text = QApplication.clipboard().text()
-        url = core.App._extract_url_from_text(text) if hasattr(core.App, "_extract_url_from_text") else None
+        # 注意：这里必须用 core 的模块级函数；过去写成 core.App._extract_url_from_text(text)
+        # 是把实例方法当静态方法调，必然抛 TypeError，"一键粘贴"直接不可用。
+        url = core.extract_url_from_text(text)
         if url:
             self.url_edit.setText(url)
+            self.url_edit.setFocus()
         else:
             QMessageBox.warning(self, "剪贴板", "剪贴板内容不是有效链接，也未找到 URL。")
 
@@ -727,10 +899,10 @@ class VideoDownloaderWindow(QMainWindow):
 
     # ---------------- 同步 UI 到配置 ----------------
     def _sync_ui_to_config(self):
-        self.config["default_format"] = self.cb_format.currentText()
-        self.config["default_quality"] = self.cb_quality.currentText()
-        label = self.cb_proxy.currentText()
-        self.config["proxy_mode"] = core.App._proxy_raw_from_label(label)
+        # 下拉框显示的是中文标签，原始值放在 itemData 里
+        self.config["default_format"] = self.cb_format.currentData() or "mp4"
+        self.config["default_quality"] = self.cb_quality.currentData() or "best"
+        self.config["proxy_mode"] = self.cb_proxy.currentData() or "auto"
         core.save_config(self.config)
 
     # ---------------- 开始下载 ----------------
@@ -761,11 +933,12 @@ class VideoDownloaderWindow(QMainWindow):
 
         self.progress.setValue(0)
         self.percent_label.setText("0.0%")
-        self.status_label.setText("正在获取视频信息... (0 KB/s - 剩余: --:--)")
-        self.info_title.setText("视频标题：正在获取视频信息...")
+        self.status_label.setText("正在获取视频信息…")
+        self.info_title.setText("正在获取视频信息…")
         self.info_meta.setText("时长：—")
         self.info_size.setText("预计大小：—")
         self.info_extra.setText("")
+        self.thumb.setPixmap(_make_thumb_placeholder(206, 115))
 
         self._dl = core.Downloader(
             url=url, output_path=output_path, config=self.config,
@@ -774,7 +947,7 @@ class VideoDownloaderWindow(QMainWindow):
             done_cb=self.sig.done.emit, log_cb=self.sig.log.emit,
             error_cb=self.sig.error.emit,
         )
-        self._thread = __import__("threading").Thread(target=self._dl.run, daemon=True)
+        self._thread = threading.Thread(target=self._dl.run, daemon=True)
         self._thread.start()
 
     # ---------------- 信息回调 ----------------
@@ -786,11 +959,11 @@ class VideoDownloaderWindow(QMainWindow):
         platform = info.get("platform", "?")
         size = info.get("filesize", 0)
 
-        self.info_title.setText(f"视频标题：{title}")
-        self.info_meta.setText(f"时长：{self._fmt_duration(duration)}")
-        self.info_size.setText(f"预计大小：{self._fmt_size(size)}")
-        self.info_extra.setText(
-            f"分辨率：{resolution}    平台：{platform}    上传者：{uploader}")
+        self.info_title.setText(title)
+        self.info_meta.setText(
+            f"时长 {self._fmt_duration(duration)}   ·   {resolution}   ·   {platform}")
+        self.info_size.setText(f"预计大小 {self._fmt_size(size)}")
+        self.info_extra.setText(f"上传者：{uploader}")
         if self._dl is not None:
             self._append_log(f"[信息] 文件：{os.path.basename(self._dl.output_path)}")
 
@@ -831,8 +1004,7 @@ class VideoDownloaderWindow(QMainWindow):
         reply.deleteLater()
         pm = QPixmap()
         if pm.loadFromData(data):
-            pm = pm.scaled(self.thumb.size(), Qt.KeepAspectRatio,
-                           Qt.SmoothTransformation)
+            pm = pm.scaled(206, 115, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.thumb.setPixmap(pm)
 
     # ---------------- 进度回调 ----------------
@@ -845,15 +1017,17 @@ class VideoDownloaderWindow(QMainWindow):
         category = report.get("category", "未知错误")
         reason = report.get("reason", "")
         solution = report.get("solution", "")
+        self.status_label.setText(f"已失败 · {category}")
         QMessageBox.critical(self, "下载失败诊断报告",
                              f"【{category}】\n\n原因：{reason}\n\n建议：{solution}")
 
     # ---------------- 完成回调 ----------------
     def _on_done(self, ok: bool, msg: str):
         self._set_ui_state(True)
-        self.btn_stop.setEnabled(False)
-        self.status_label.setText("正在等待粘贴链接... (0 KB/s - 剩余: --:--)")
         if ok:
+            self.progress.setValue(100)
+            self.percent_label.setText("100.0%")
+            self.status_label.setText("已完成")
             self._append_log(f"[完成] {msg}")
             self.url_edit.clear()
             self.url_edit.setFocus()
@@ -864,7 +1038,10 @@ class VideoDownloaderWindow(QMainWindow):
                 except Exception:
                     pass
         else:
-            self._append_log(f"[失败] {msg}")
+            # 用户主动停止不该标红当"失败"报
+            stopped = ("停止" in msg) or ("取消" in msg)
+            self.status_label.setText("已停止 · 可以重新开始" if stopped else "已失败 · 见诊断提示")
+            self._append_log(f"{'[提示]' if stopped else '[失败]'} {msg}")
 
     # ---------------- 停止下载 ----------------
     def _stop_download(self):
@@ -876,9 +1053,10 @@ class VideoDownloaderWindow(QMainWindow):
     def _update_core(self):
         self.btn_update.setEnabled(False)
         self.btn_update.setText("更新中…")
-        t = __import__("threading").Thread(
-            target=lambda: core.update_ytdlp(self._on_update_done), daemon=True)
-        t.start()
+        # 结果经信号回到主线程：Qt 控件只能在主线程里改
+        threading.Thread(
+            target=lambda: core.update_ytdlp(self.sig.core_update.emit),
+            daemon=True).start()
 
     def _on_update_done(self, msg: str):
         self.btn_update.setEnabled(True)
@@ -895,6 +1073,9 @@ class VideoDownloaderWindow(QMainWindow):
         self.cb_quality.setEnabled(enabled)
         self.cb_proxy.setEnabled(enabled)
         self.btn_settings.setEnabled(enabled)
+        self.btn_update.setEnabled(enabled)
+        # 下载中才让"停止下载"可点（原来它一直是灰的，等于没有这个按钮）
+        self.btn_stop.setEnabled(not enabled)
 
     # ---------------- 关闭 ----------------
     def closeEvent(self, event):

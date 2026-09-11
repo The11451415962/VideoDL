@@ -432,6 +432,24 @@ def get_next_filepath(target_dir: str, base_name: str, ext: str = "webm") -> str
         idx += 1
 
 
+def extract_url_from_text(text: str) -> str | None:
+    """从文本中提取第一个 URL；若文本本身就是链接则原样返回。
+
+    供两个界面共用（tkinter 版通过 App._extract_url_from_text 调用，
+    Qt 版直接调用本函数，避免去访问 App 的私有实例方法）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.lower().startswith("http"):
+        return text.rstrip('。．.，,/\\')
+    # 适配抖音分享文本："复制打开抖音，看看【xxx】''标题... https://v.douyin.com/xxxxx/ ..."
+    match = re.search(r'https?://[^\s]+', text)
+    if match:
+        return match.group(0).rstrip('。．.，,/\\')
+    return None
+
+
 # ============================================================
 # 启动辅助函数（隐藏 Windows 控制台黑框）
 # ============================================================
@@ -1270,16 +1288,7 @@ class App(tk.Tk):
     # --------------- 一键粘贴 ---------------
     def _extract_url_from_text(self, text: str) -> str | None:
         """从文本中提取第一个 URL；若文本本身就是链接则原样返回。"""
-        text = text.strip()
-        if not text:
-            return None
-        if text.lower().startswith("http"):
-            return text.rstrip('。．.，,/\\')
-        # 适配抖音分享文本："复制打开抖音，看看【xxx】''标题... https://v.douyin.com/xxxxx/ ..."
-        match = re.search(r'https?://[^\s]+', text)
-        if match:
-            return match.group(0).rstrip('。．.，,/\\')
-        return None
+        return extract_url_from_text(text)
 
     def _paste_from_clipboard(self):
         try:
