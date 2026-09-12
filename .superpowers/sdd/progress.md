@@ -83,38 +83,58 @@ Python 桥。开着混淆又没写 keep 规则的结果是"装得上但一跑就
 
 ## 已知功能缺陷（比"遗留小项"严重，优先修）
 
-**安卓端「编码兜底」转码是死代码 —— `_ensure_importable()` 在安卓上必然失败。**
+**安卓端「编码兜底」转码是死代码 —— 已真机确认（2026-09-13）。**
 
-打包的 `libffmpeg.so` 是 LGPL-3.0 精简构建：
+真机上直接跑打包进去的二进制：
 
 ```
---disable-gpl --disable-nonfree --enable-version3
---disable-everything ... --enable-encoder=mjpeg
+$ adb shell run-as com.videodl.app <nativeLibraryDir>/libffmpeg.so -encoders
+Encoders:
+ ------
+ VFS..D mjpeg
 ```
 
-**只开了一个 `mjpeg` 编码器**，没有 h264、没有 aac。而 `ytdlp_bridge.py` 请求的是
-`-c:v libx264` / `-c:a aac` → ffmpeg 直接报 "Unknown encoder"，两次降级都失败 →
-保留原文件。
+**只有一个 mjpeg 编码器**，没有 h264、没有 aac。`ytdlp_bridge.py` 请求的
+`-c:v libx264` / `-c:a aac` 必然失败。
 
 - 影响面：格式只提供 HEVC/AV1 时无法转成 H.264，相册/剪映可能打不开
   —— 正是这个功能本来要解决的场景
-- 不受影响：合并音视频流走 `-c copy`，不需要编码器，日常下载正常
+- 不受影响：合并音视频流走 `-c copy`，不需要编码器，日常下载正常（真机验证过）
 - 根因不是漏接线，是许可证约束：libx264 是 GPL，能闭源商用的 ffmpeg 构建不含它
+- **已改成快速失败**：转码前先探测编码器能力，没有 H.264 编码器就立刻如实说明并保留原文件，
+  不再白跑两次 ffmpeg、也不再打出"参数不对"这种误导日志
 - 修法：重建 `libffmpeg.so`，用 `--enable-libopenh264`（BSD）或
   `--enable-jni --enable-mediacodec --enable-encoder=h264_mediacodec`（Apache-2.0）+ 原生 aac
-- **待确认**：静态分析结论，还没在真机上跑 `ffmpeg -encoders` 核实
-- 旧的文档说法（"`libffmpeg.so` 含 libx264"）**是错的**，已在 README 和交接文档改正。
-  很可能是把桌面端系统 ffmpeg 8.1.1（Gyan 完整版，确实有 libx264）误当成了安卓端这份
+- 旧的文档说法（"`libffmpeg.so` 含 libx264"）**是错的**，已在 README 和交接文档改正
+
+## 真机验证记录（2026-09-13，PJC110 / Android 15）
+
+这一轮修完都上了真机验证，不是只看代码：
+
+| 修的什么 | 真机证据 |
+|---|---|
+| 音频产物 m4a（原 mp3 根本出不来） | `runDownload: format=m4a quality=audio` → `download result: {"ok": true}`；产物 `Music/VideoDL/xxx.m4a`；MediaStore 归到 audio 集合；记录 `"仅音频 · m4a"` + `audio:true` |
+| 取消被当成失败 | 记录 `status:"cancelled"`（旧版会写 `error`），界面显示「已取消」，不再弹「下载失败」通知 |
+| 界面队列被 `begin()` 抹掉 | `dispatch next from queue, remaining=3` 之后界面仍然显示「队列（3）」 |
+| 清理中间产物会误删用户文件 | logcat: `cleaned partial: 现在的小孩vs以前的小孩.f30080.mp4.part` —— 只删本次的分片 |
+| **LazyColumn 重复 key 崩溃**（本轮新发现） | 同一个链接连排 4 条 → 旧版 `IllegalArgumentException: Key "q-<url>" was already used` 直接崩进程；改成按 job id 后不再崩，进程存活 |
+| ffmpeg 没有 H.264 编码器 | `-encoders` 只列出 mjpeg（见上） |
+
+测试期间产生的文件已清理（用 MediaStore 删除，避免留下僵尸条目），
+只保留一个 528 KB 的 `.m4a` 作为"音频这条路真的通了"的证据。
 
 ## 遗留小项（carry to final review）
 
 - T1: `app/build.gradle.kts` 里空的 `productFlavors { create("main") }` 是死配置 —— 要么删，要么写清用途
 - T1: `ndk { abiFilters += listOf("arm64-v8a") }` 放在 `defaultConfig`，debug 也受约束 —— 现在是有意的，将来要跑模拟器得放开
-- T2: `AppConfig` 的字段映射在 `configFlow` 和 update lambda 里重复了一遍 —— 抽个私有函数
+- ~~T2: `AppConfig` 的字段映射在 `configFlow` 和 update lambda 里重复了一遍~~ —— 已解决：
+  现在读、写两侧共用 `ConfigRepositoryImpl.toConfig()`（写侧仍逐个 put，但映射只有一份）
 - T2: `ConfigRepositoryTest` 没有 `@Before DataStore.clear()` —— 有 flake 风险
 - T6: `Duration` 用 `Int` 存，丢失亚秒精度 —— 下游格式化时注意
 - T6: `cancel()` 没有和协程 scope 绑定，结构上偏松散
 - T9: 几个 cosmetic 小项（http 大小写、null/empty 判断）
+- 本轮新修但值得注意的约定：`Naming.isPartialOf()` 要求传**带扩展名的完整文件名**，
+  传裸标题会什么都不匹配（刻意的保守行为，别"优化"成按标题前缀匹配 —— 那会删用户文件）
 
 ## 环境限制（一直存在，别再当新问题查）
 
