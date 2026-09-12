@@ -57,28 +57,6 @@ fun SettingsScreen(
     val config by vm.config.collectAsState()
     val ctx = LocalContext.current
 
-    // SAF 选目录
-    val dirPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri?.let {
-            try {
-                ctx.contentResolver.takePersistableUriPermission(
-                    it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (_: Exception) {}
-            vm.onSaveDirChanged(it.toString())
-            // 选了但写不进去时必须当场说清楚，否则文件会静默落到 App 默认目录
-            if (!FileRepository.canWriteTreeUri(it.toString())) {
-                Toast.makeText(
-                    ctx,
-                    "该目录暂时无法直接写入，文件会先存到 App 默认目录（下方可去授权）",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
-    }
-
     // 选 Cookie 文件
     val cookiePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -105,36 +83,26 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // ---- 保存路径 ----
+            // ---- 保存位置（相册优先）----
             SectionTitle(stringResource(R.string.settings_save_dir))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = if (config.saveDirUri.isBlank()) stringResource(R.string.settings_save_dir_default)
-                           else FileRepository.friendlySaveDir(config.saveDirUri),
-                    style = MaterialTheme.typography.bodyMedium,
+                    stringResource(R.string.settings_export_gallery),
+                    style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f)
                 )
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { dirPicker.launch(null) }) {
-                    Text(stringResource(R.string.settings_choose_dir))
-                }
+                Switch(
+                    checked = config.exportToGallery,
+                    onCheckedChange = vm::onExportToGalleryChanged,
+                )
             }
-
-            // 自定义目录需要「所有文件访问权限」，否则无法真正写入
-            if (config.saveDirUri.startsWith("content://") && !FileRepository.allFilesAccess()) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "自定义目录需授权「所有文件访问」",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = { requestAllFilesAccess(ctx) }) {
-                        Text("去授权")
-                    }
-                }
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (config.exportToGallery) stringResource(R.string.settings_dest_gallery)
+                       else stringResource(R.string.settings_gallery_off_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
 
@@ -273,20 +241,5 @@ private fun DropdownSelector(
                 )
             }
         }
-    }
-}
-
-/** 打开系统「所有文件访问权限」授权页 */
-private fun requestAllFilesAccess(ctx: android.content.Context) {
-    if (android.os.Build.VERSION.SDK_INT < 30) return
-    try {
-        val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-        intent.data = android.net.Uri.parse("package:${ctx.packageName}")
-        ctx.startActivity(intent)
-    } catch (_: Exception) {
-        try {
-            val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-            ctx.startActivity(intent)
-        } catch (_: Exception) {}
     }
 }

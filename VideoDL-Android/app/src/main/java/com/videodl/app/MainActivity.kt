@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.videodl.app.ui.home.EXTRA_SHARE_STARTED
 import com.videodl.app.ui.home.EXTRA_SHARE_URL
 import com.videodl.app.ui.home.HomeScreen
 import com.videodl.app.ui.home.HomeViewModel
@@ -81,7 +82,9 @@ class MainActivity : ComponentActivity() {
             intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() ?: ""
         } else ""
         val url = extractUrl(forwarded ?: shared)
-        if (url.isNotBlank()) homeVm.consumeSharedUrl(url)
+        // ShareReceiver 通常已经直接启动了下载，这里只回填输入框，避免下两遍
+        val startedByReceiver = intent.getBooleanExtra(EXTRA_SHARE_STARTED, false)
+        if (url.isNotBlank()) homeVm.consumeSharedUrl(url, startNow = !startedByReceiver)
     }
 
     /** 与桌面版 _extract_url_from_text 1:1 对应 */

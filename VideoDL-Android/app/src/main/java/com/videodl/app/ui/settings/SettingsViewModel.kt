@@ -30,11 +30,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { configRepo.update(transform) }
     }
 
-    fun onSaveDirChanged(uri: String) = update { it.copy(saveDirUri = uri) }
     fun onProxyModeChanged(mode: String) = update { it.copy(proxyMode = mode) }
     fun onProxyUrlChanged(url: String) = update { it.copy(proxyUrl = url) }
     fun onCookieModeChanged(mode: String) = update { it.copy(cookieMode = mode) }
     fun onCookiePathChanged(path: String) = update { it.copy(cookiePathUri = path) }
+    fun onExportToGalleryChanged(on: Boolean) = update { it.copy(exportToGallery = on) }
 
     /** 用户从文件选择器选了 cookies.txt：复制到 App 私有目录（yt-dlp 能直接读），并记录路径 */
     fun onCookieFilePicked(uri: Uri) {

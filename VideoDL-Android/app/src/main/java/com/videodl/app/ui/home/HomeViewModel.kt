@@ -5,28 +5,19 @@ import android.content.ClipboardManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.videodl.app.MainApplication
-import com.videodl.app.data.AppConfig
 import com.videodl.app.data.ConfigRepository
 import com.videodl.app.data.ConfigRepositoryImpl
-import com.videodl.app.data.FileRepository
-import com.videodl.app.engine.DownloadEvent
-import com.videodl.app.engine.DownloadOptions
-import com.videodl.app.engine.Platform
+import com.videodl.app.data.DownloadCenter
+import com.videodl.app.data.DownloadStatus
+import com.videodl.app.data.VideoInfo
+import com.videodl.app.service.DownloadService
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
-data class VideoInfo(
-    val title: String, val uploader: String,
-    val duration: Int, val resolution: String,
-)
-
-enum class DownloadStatus { Idle, Fetching, Downloading, Done, Error }
 
 data class HomeUiState(
     val url: String = "",
@@ -39,115 +30,104 @@ data class HomeUiState(
     val eta: String = "",
     val status: DownloadStatus = DownloadStatus.Idle,
     val logs: List<String> = emptyList(),
+    /** 完成后打开用的目标：相册是 content:// URI，未开相册时是文件路径 */
     val finishedFile: String? = null,
     val errorMessage: String = "",
     /** 来自设置页的「下载完成后自动打开文件」开关 */
     val autoOpenFile: Boolean = true,
-    /** 实际写入的目录（用于如实告知用户文件到底存到哪了） */
-    val effectiveSaveDir: String = "",
-)
+    /** 人类可读的保存位置（"系统相册" 或某个目录） */
+    val destination: String = "",
+) {
+    val busy: Boolean
+        get() = status == DownloadStatus.Downloading || status == DownloadStatus.Fetching
+}
 
+/**
+ * 主页只负责"选择"和"转发动作"；真正的下载在 [DownloadService] 里跑，
+ * 状态从进程内的 [DownloadCenter] 读回来。这样切走 App 下载也不会断。
+ */
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
-    private val engine = (app as MainApplication).engine
+    private val appCtx: Application = app
     private val configRepo: ConfigRepository = ConfigRepositoryImpl(app)
 
-    private val _state = MutableStateFlow(HomeUiState())
-    val state: StateFlow<HomeUiState> = _state.asStateFlow()
+    /** 界面自己的选择状态（链接、格式、清晰度、代理） */
+    private val selection = MutableStateFlow(HomeUiState())
+
+    val state: StateFlow<HomeUiState> = combine(selection, DownloadCenter.state) { sel, dl ->
+        sel.copy(
+            percent = dl.percent,
+            speed = dl.speed,
+            eta = dl.eta,
+            status = dl.status,
+            logs = dl.logs,
+            videoInfo = dl.info,
+            finishedFile = dl.finishedUri,
+            errorMessage = dl.error,
+            destination = dl.destination,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUiState())
 
     init {
         viewModelScope.launch {
             configRepo.configFlow.collect { cfg ->
-                _state.update {
-                    it.copy(proxyMode = cfg.proxyMode, format = cfg.defaultFormat,
-                           quality = cfg.defaultQuality, autoOpenFile = cfg.autoOpenFile,
-                           effectiveSaveDir = FileRepository.resolveBaseDir(getApplication(), cfg))
+                selection.update {
+                    it.copy(
+                        proxyMode = cfg.proxyMode,
+                        format = cfg.defaultFormat,
+                        quality = cfg.defaultQuality,
+                        autoOpenFile = cfg.autoOpenFile,
+                    )
                 }
             }
         }
     }
 
-    fun onUrlChanged(url: String) = _state.update { it.copy(url = url) }
-    fun onFormatChanged(fmt: String) = _state.update { it.copy(format = fmt) }
-    fun onQualityChanged(q: String) = _state.update { it.copy(quality = q) }
-    fun onProxyModeChanged(p: String) = _state.update { it.copy(proxyMode = p) }
+    fun onUrlChanged(url: String) = selection.update { it.copy(url = url) }
+    fun onFormatChanged(fmt: String) = selection.update { it.copy(format = fmt) }
+    fun onQualityChanged(q: String) = selection.update { it.copy(quality = q) }
+    fun onProxyModeChanged(p: String) = selection.update { it.copy(proxyMode = p) }
 
-    /** 系统分享直达入口：ShareReceiver 把 URL 带进来 */
-    fun consumeSharedUrl(url: String) {
-        if (url.isNotBlank()) { _state.update { it.copy(url = url) }; startDownload() }
+    /**
+     * 系统分享直达。
+     *
+     * @param startNow 由 [com.videodl.app.ShareReceiver] 分享过来时它是 true —— 下载
+     *   已经在分享入口直接启动了，这里只回填链接，避免重复下一次；
+     *   其它入口（例如直接把 SEND 发给界面）才由这里启动。
+     */
+    fun consumeSharedUrl(url: String, startNow: Boolean = true) {
+        if (url.isBlank()) return
+        selection.update { it.copy(url = url) }
+        if (startNow && !state.value.busy) startDownload()
     }
 
     fun startDownload() {
-        val s = _state.value
-        if (s.url.isBlank() || s.status == DownloadStatus.Downloading) return
-        _state.update { it.copy(status = DownloadStatus.Fetching, logs = emptyList(), errorMessage = "") }
-        viewModelScope.launch {
-            val config = configRepo.configFlow.first()
-            val baseDir = FileRepository.resolveBaseDir(getApplication(), config)
-            // 如实反映"文件到底会存到哪"：用户选了自定义目录但没授予所有文件访问时，
-            // resolveBaseDir 会回退到默认目录，这里把真实目录暴露给界面，避免静默换地方
-            _state.update { it.copy(effectiveSaveDir = baseDir) }
-            // 先用占位名构建，拿到标题后再重建
-            val options = DownloadOptions(
-                url = s.url,
-                outputPath = FileRepository.buildOutputPath(baseDir, "video", s.format, s.quality),
-                proxyMode = s.proxyMode,
-                proxyUrl = config.proxyUrl,
-                cookieMode = config.cookieMode,
-                cookiePath = config.cookiePathUri,
-                format = s.format,
-                quality = s.quality,
-                platform = Platform.detect(s.url),
-                ffmpegLocation = FileRepository.ffmpegLocation(getApplication()),
-            )
-            // fetchInfo 是同步网络解析，必须放 IO 线程，否则卡 UI
-            val info = try {
-                withContext(Dispatchers.IO) { engine.fetchInfo(s.url, options) }
-            } catch (e: Exception) {
-                null
-            }
-            // 用视频标题重建输出路径（与桌面版一致的命名）
-            val finalOptions = info?.title
-                ?.takeIf { it.isNotBlank() }
-                ?.let { title ->
-                    options.copy(outputPath = FileRepository.buildOutputPath(baseDir, title, s.format, s.quality))
-                }
-                ?: options
-            if (info != null) {
-                _state.update {
-                    it.copy(videoInfo = VideoInfo(info.title, info.uploader, info.duration, info.resolution),
-                           status = DownloadStatus.Downloading)
-                }
-            } else _state.update { it.copy(status = DownloadStatus.Downloading) }
-            engine.download(finalOptions).collect { ev ->
-                when (ev) {
-                    is DownloadEvent.Progress -> _state.update { it.copy(percent = ev.percent, speed = ev.speed, eta = ev.eta) }
-                    is DownloadEvent.Log -> _state.update { it.copy(logs = it.logs.takeLast(200) + ev.line) }
-                    is DownloadEvent.Finished -> _state.update { it.copy(status = DownloadStatus.Done, percent = 100f, finishedFile = ev.filePath) }
-                    is DownloadEvent.Error -> _state.update {
-                        it.copy(status = DownloadStatus.Error, errorMessage = ev.message,
-                                logs = it.logs.takeLast(200) + "错误：${ev.message}")
-                    }
-                    else -> {}
-                }
-            }
-        }
+        val s = selection.value
+        if (s.url.isBlank() || s.busy) return
+        DownloadCenter.reset()
+        DownloadService.start(appCtx, s.url.trim(), s.format, s.quality, s.proxyMode)
     }
 
-    fun cancel() { engine.cancel() }
+    fun cancel() {
+        // 与 Service 同进程：先让引擎停下，Service 收到取消结果后会收尾并停掉通知
+        (appCtx as MainApplication).engine.cancel()
+        DownloadService.cancel(appCtx)
+    }
 
     fun pasteFromClipboard() {
-        val clipboard = getApplication<Application>()
-            .getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipboard = appCtx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as ClipboardManager
         val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: return
         val url = extractUrl(text)
-        if (url.isNotBlank()) _state.update { it.copy(url = url) }
+        if (url.isNotBlank()) selection.update { it.copy(url = url) }
     }
 
     /** 与桌面版 _extract_url_from_text 1:1 对应 */
     private fun extractUrl(text: String): String {
         val t = text.trim()
         if (t.startsWith("http")) return t.trimEnd('。', '．', '.', '，', ',', '/', '\\')
-        Regex("https?://\\S+").find(t)?.let { return it.value.trimEnd('。', '．', '.', '，', ',', '/', '\\') }
+        Regex("https?://\\S+").find(t)?.let {
+            return it.value.trimEnd('。', '．', '.', '，', ',', '/', '\\')
+        }
         return ""
     }
 }

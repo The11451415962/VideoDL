@@ -1,6 +1,7 @@
 package com.videodl.app.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -26,34 +27,28 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
         val FORMAT = stringPreferencesKey("default_format")
         val QUALITY = stringPreferencesKey("default_quality")
         val AUTO_OPEN = booleanPreferencesKey("auto_open_file")
+        val GALLERY = booleanPreferencesKey("export_to_gallery")
     }
 
-    override val configFlow: Flow<AppConfig> = context.dataStore.data.map { p ->
-        AppConfig(
-            saveDirUri = p[Keys.SAVE_DIR] ?: "",
-            proxyMode = p[Keys.PROXY_MODE] ?: "auto",
-            proxyUrl = p[Keys.PROXY_URL] ?: "http://127.0.0.1:7897",
-            cookieMode = p[Keys.COOKIE_MODE] ?: "none",
-            cookiePathUri = p[Keys.COOKIE_PATH] ?: "",
-            defaultFormat = p[Keys.FORMAT] ?: "mp4",
-            defaultQuality = p[Keys.QUALITY] ?: "best",
-            autoOpenFile = p[Keys.AUTO_OPEN] != false,
-        )
-    }
+    /** 唯一的 Preferences → AppConfig 映射，读、写两侧共用，避免默认值走偏 */
+    private fun Preferences.toConfig(): AppConfig = AppConfig(
+        saveDirUri = this[Keys.SAVE_DIR] ?: "",
+        proxyMode = this[Keys.PROXY_MODE] ?: "auto",
+        proxyUrl = this[Keys.PROXY_URL] ?: "http://127.0.0.1:7897",
+        cookieMode = this[Keys.COOKIE_MODE] ?: "none",
+        cookiePathUri = this[Keys.COOKIE_PATH] ?: "",
+        defaultFormat = this[Keys.FORMAT] ?: "mp4",
+        defaultQuality = this[Keys.QUALITY] ?: "best",
+        autoOpenFile = this[Keys.AUTO_OPEN] != false,
+        exportToGallery = this[Keys.GALLERY] != false,
+    )
+
+    override val configFlow: Flow<AppConfig> =
+        context.dataStore.data.map { it.toConfig() }
 
     override suspend fun update(transform: (AppConfig) -> AppConfig) {
         context.dataStore.edit { p ->
-            val cur = AppConfig(
-                saveDirUri = p[Keys.SAVE_DIR] ?: "",
-                proxyMode = p[Keys.PROXY_MODE] ?: "auto",
-                proxyUrl = p[Keys.PROXY_URL] ?: "http://127.0.0.1:7897",
-                cookieMode = p[Keys.COOKIE_MODE] ?: "none",
-                cookiePathUri = p[Keys.COOKIE_PATH] ?: "",
-                defaultFormat = p[Keys.FORMAT] ?: "mp4",
-                defaultQuality = p[Keys.QUALITY] ?: "best",
-                autoOpenFile = p[Keys.AUTO_OPEN] != false,
-            )
-            val next = transform(cur)
+            val next = transform(p.toConfig())
             p[Keys.SAVE_DIR] = next.saveDirUri
             p[Keys.PROXY_MODE] = next.proxyMode
             p[Keys.PROXY_URL] = next.proxyUrl
@@ -62,6 +57,7 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
             p[Keys.FORMAT] = next.defaultFormat
             p[Keys.QUALITY] = next.defaultQuality
             p[Keys.AUTO_OPEN] = next.autoOpenFile
+            p[Keys.GALLERY] = next.exportToGallery
         }
     }
 }

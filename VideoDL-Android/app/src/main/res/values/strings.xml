@@ -61,4 +61,11 @@
     <string name="notif_downloading_title">VideoDL 下载中</string>
     <string name="notif_complete_title">下载完成</string>
     <string name="notif_error_title">下载失败</string>
+
+    <!-- 相册 -->
+    <string name="hint_in_gallery">已存入系统相册（Movies/VideoDL），可直接在相册或剪映里打开</string>
+    <string name="settings_export_gallery">下载后存入系统相册</string>
+    <string name="settings_export_gallery_desc">推荐：剪映、相册直接可见，且不需要任何存储权限</string>
+    <string name="settings_gallery_off_hint">已关闭：文件只存在 App 私有目录，其它 App 看不到</string>
+    <string name="settings_dest_gallery">保存位置：系统相册 · Movies/VideoDL</string>
 </resources>

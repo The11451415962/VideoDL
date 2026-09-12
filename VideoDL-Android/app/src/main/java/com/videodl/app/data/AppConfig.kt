@@ -9,4 +9,6 @@ data class AppConfig(
     val defaultFormat: String = "mp4",
     val defaultQuality: String = "best",
     val autoOpenFile: Boolean = true,
+    /** 下载完成后发布到系统相册/媒体库：剪映、相册等 App 直接可见，且无需任何存储权限 */
+    val exportToGallery: Boolean = true,
 )

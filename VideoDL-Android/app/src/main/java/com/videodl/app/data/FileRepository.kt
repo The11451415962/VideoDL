@@ -1,6 +1,12 @@
 package com.videodl.app.data
 
+import android.content.ContentValues
 import android.content.Context
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import java.io.File
 
 object Naming {
@@ -40,6 +46,85 @@ object FileRepository {
 
     fun defaultBaseDir(context: Context): String =
         File(context.getExternalFilesDir(null), "VideoDL").apply { mkdirs() }.absolutePath
+
+    /** 相册里的相对目录（用户在相册/剪映里看到的路径） */
+    const val GALLERY_SUBDIR = "VideoDL"
+
+    /**
+     * 把下好的文件发布到系统媒体库（相册）。
+     *
+     * 好处有两个：剪映/相册等 App 能直接看到它；而且完全不需要
+     * 「所有文件访问」这种敏感权限（Android 10+ 用 MediaStore 写入即可）。
+     *
+     * 成功返回媒体库的 content:// URI，失败返回 null（调用方保留原文件就是）。
+     */
+    fun publishToGallery(
+        context: Context,
+        file: File,
+        mime: String = "video/mp4",
+        isAudio: Boolean = false,
+    ): Uri? {
+        if (!file.isFile || file.length() <= 0L) return null
+        val resolver = context.contentResolver
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val collection = if (isAudio) {
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+                val baseDir = if (isAudio) {
+                    Environment.DIRECTORY_MUSIC
+                } else {
+                    Environment.DIRECTORY_MOVIES
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "$baseDir/$GALLERY_SUBDIR")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(collection, values) ?: return null
+                val copied = try {
+                    resolver.openOutputStream(uri)?.use { out ->
+                        file.inputStream().use { input -> input.copyTo(out) }
+                    }
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (!copied) {
+                    runCatching { resolver.delete(uri, null, null) }
+                    return null
+                }
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                uri
+            } else {
+                // Android 9 及以下：直接写公共目录 + 通知媒体扫描（需要 WRITE_EXTERNAL_STORAGE）
+                @Suppress("DEPRECATION")
+                val publicDir = if (isAudio) {
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+                } else {
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                }
+                val dir = File(publicDir, GALLERY_SUBDIR)
+                if (!dir.isDirectory && !dir.mkdirs()) return null
+                var target = File(dir, file.name)
+                var idx = 2
+                while (target.exists()) {
+                    target = File(dir, "${file.nameWithoutExtension}($idx).${file.extension}")
+                    idx++
+                }
+                file.copyTo(target, overwrite = false)
+                MediaScannerConnection.scanFile(context, arrayOf(target.absolutePath), arrayOf(mime), null)
+                Uri.fromFile(target)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     /** 是否已授予「所有文件访问权限」(MANAGE_EXTERNAL_STORAGE，Android 11+ 才有) */
     fun allFilesAccess(): Boolean =

@@ -50,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.videodl.app.R
+import com.videodl.app.data.DownloadStatus
 import com.videodl.app.data.FileRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -224,12 +225,11 @@ fun HomeScreen(
                 )
             }
 
-            // 如实显示实际保存目录：选了自定义目录但没授权时会回退到 App 目录，
-            // 不写出来用户就会"找不到文件"
-            if (state.effectiveSaveDir.isNotBlank()) {
+            // 如实告诉用户文件去哪了：默认是系统相册，关掉相册开关时是某个目录
+            if (state.destination.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "保存到：${state.effectiveSaveDir}",
+                    text = "保存位置：${state.destination}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -246,7 +246,7 @@ fun HomeScreen(
             ) {
                 Button(
                     onClick = vm::startDownload,
-                    enabled = state.status != DownloadStatus.Downloading && state.status != DownloadStatus.Fetching,
+                    enabled = !state.busy,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Filled.PlayArrow, contentDescription = null)
@@ -255,7 +255,7 @@ fun HomeScreen(
                 }
                 OutlinedButton(
                     onClick = vm::cancel,
-                    enabled = state.status == DownloadStatus.Downloading || state.status == DownloadStatus.Fetching,
+                    enabled = state.busy,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Filled.Close, contentDescription = null)
@@ -272,6 +272,14 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.btn_open_file))
+                }
+                if (state.destination.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.hint_in_gallery),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -350,17 +358,25 @@ private fun formatDuration(seconds: Int): String {
     return "$m:${s.toString().padStart(2, '0')}"
 }
 
-private fun openFile(ctx: android.content.Context, path: String) {
+/** 打开结果：相册里的是 content:// URI，未开相册时是本地文件路径，两种都要支持 */
+private fun openFile(ctx: android.content.Context, target: String) {
     try {
-        val file = java.io.File(path)
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            ctx, "${ctx.packageName}.fileprovider", file
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "video/*")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val mime = when {
+            target.endsWith(".mp3", true) -> "audio/mpeg"
+            target.endsWith(".webm", true) -> "video/webm"
+            else -> "video/*"
         }
-        ctx.startActivity(intent)
+        val uri = if (target.startsWith("content://")) {
+            android.net.Uri.parse(target)
+        } else {
+            androidx.core.content.FileProvider.getUriForFile(
+                ctx, "${ctx.packageName}.fileprovider", java.io.File(target)
+            )
+        }
+        ctx.startActivity(Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
     } catch (e: Exception) {
         Toast.makeText(ctx, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
     }
