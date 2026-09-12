@@ -14,10 +14,18 @@ data class VideoInfo(
     val thumbnail: String = "",
 )
 
-enum class DownloadStatus { Idle, Fetching, Downloading, Done, Error }
+enum class DownloadStatus { Idle, Fetching, Downloading, Done, Error, Cancelled }
 
 /** 排队等待下载的一项（界面上要在"队列"里列出来） */
 data class QueuedItem(
+    /**
+     * 这一项的稳定唯一标识。
+     *
+     * **必须存在**：界面的 LazyColumn 用它当 key，而队列里出现同一个链接两次是很正常的
+     * （连着分享同一部视频、或同一个视频下两遍）。早先用 `url` 当 key，重复链接会撞 key，
+     * 直接抛 `IllegalArgumentException: Key ... was already used` 把 App 崩掉 —— 真机复现过。
+     */
+    val id: Long,
     val url: String,
     val label: String = "",
 )
@@ -53,12 +61,19 @@ object DownloadCenter {
 
     private const val MAX_LOGS = 200
 
+    /**
+     * 开始一次新的下载：清掉上一次的进度/结果，但**必须保留队列**。
+     *
+     * 旧实现直接 `DownloadSnapshot()` 全量重置，而 `queued` 也在里面 ——
+     * 结果是"还有 N 个在排队，界面上队列却空了"（通知栏读的是 Service 自己的
+     * queue.size，所以一直是准的，只有界面错，更难发现）。
+     */
     fun reset() {
-        _state.value = DownloadSnapshot()
+        _state.update { DownloadSnapshot(queued = it.queued) }
     }
 
     fun begin() {
-        _state.value = DownloadSnapshot(status = DownloadStatus.Fetching)
+        _state.update { DownloadSnapshot(status = DownloadStatus.Fetching, queued = it.queued) }
     }
 
     fun update(transform: (DownloadSnapshot) -> DownloadSnapshot) {

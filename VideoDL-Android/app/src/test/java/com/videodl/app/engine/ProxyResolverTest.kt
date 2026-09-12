@@ -4,9 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FormatTest {
-    @Test fun audio_returnsMp3() {
-        assertEquals(listOf("-f", "bestaudio/best", "--audio-format", "mp3"),
-            Format.resolve("mp4", "audio", "YouTube"))
+    @Test fun audio_usesM4aAndPrefersAac() {
+        // 音频产物是 m4a 不是 mp3：yt-dlp 转 mp3 要 libmp3lame，而打包进 APK 的
+        // ffmpeg 只编了 mjpeg 编码器（见 README 已知问题），选 mp3 只会失败。
+        // m4a 在源音轨已是 AAC 时走 copy，所以选择器要优先挑 mp4a。
+        assertEquals(
+            listOf("-f", "bestaudio[acodec^=mp4a]/bestaudio", "--audio-format", "m4a"),
+            Format.resolve("mp4", "audio", "YouTube"),
+        )
     }
 
     @Test fun mp4_首要条件必须是编码而不是容器() {

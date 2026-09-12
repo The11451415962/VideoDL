@@ -162,10 +162,12 @@ fun SettingsScreen(
             // ---- 默认格式 ----
             SectionTitle(stringResource(R.string.settings_default_format))
             DropdownSelector(
+                // 音频档位是 m4a 不是 mp3（打包的 ffmpeg 没有 mp3 编码器，见 README 已知问题）。
+                // 老配置里可能存着 "mp3"，显示时归一化成 m4a，免得下拉框选不中任何一项。
                 options = listOf("mp4" to stringResource(R.string.format_mp4),
                                   "webm" to stringResource(R.string.format_webm),
-                                  "mp3" to stringResource(R.string.format_mp3)),
-                selected = config.defaultFormat,
+                                  "m4a" to stringResource(R.string.format_m4a)),
+                selected = config.defaultFormat.let { if (it == "mp3") "m4a" else it },
                 onSelect = vm::onDefaultFormatChanged,
             )
 

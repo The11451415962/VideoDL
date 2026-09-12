@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ClipboardManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.videodl.app.data.MediaTarget
 import com.videodl.app.MainApplication
 import com.videodl.app.data.ConfigRepository
 import com.videodl.app.data.ConfigRepositoryImpl
@@ -143,23 +144,30 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         val url = s.url.trim()
         if (url.isBlank() || s.busy) return
         DownloadCenter.reset()
-        val format = formatOverride.ifBlank {
-            if (selector.isNotBlank() && selector.startsWith("bestaudio")) "mp3" else "mp4"
-        }
-        // 画质标签用"短边"叫法（竖屏 1080×1920 显示为 1080p）
+        // 先在格式表里反查用户点的是哪一行（用它判断"这是不是一条纯音频流"）。
+        // 画质标签用"短边"叫法（竖屏 1080×1920 显示为 1080p）。
         val picked = s.formats.firstOrNull { fmt -> selector.isNotBlank() && selector.contains(fmt.id) }
+        val audioPicked = picked?.audioOnly == true
+        val format = formatOverride.ifBlank {
+            // 旧版判的是 `selector.startsWith("bestaudio")`，但 downloadSelector 返回的是
+            // 具体格式 id（如 "30280"），这个条件永远不成立 —— 于是选了音频却按 mp4 命名，
+            // 又被 buildOutputPath 按 quality=="audio" 写成 .mp3，产出后缀与内容不符的文件。
+            if (audioPicked || selector.startsWith("bestaudio")) MediaTarget.AUDIO_EXT else "mp4"
+        }
         DownloadService.start(
             ctx = appCtx,
             url = url,
             format = format,
-            quality = picked?.qualityLabel ?: "best",
+            // 音频任务没有"画质"可言，标签要显示成"仅音频"，否则会写成"最佳 · m4a"
+            quality = if (MediaTarget.isAudio(format, "")) "audio"
+            else (picked?.qualityLabel ?: "best"),
             proxyMode = "",
             selector = selector,
         )
     }
 
-    /** 仅音频：走 mp3 档位 */
-    fun startAudioDownload() = startDownload(selector = "", formatOverride = "mp3")
+    /** 仅音频：走音频档位（产物是 m4a，见 [MediaTarget] 的说明） */
+    fun startAudioDownload() = startDownload(selector = "", formatOverride = MediaTarget.AUDIO_EXT)
 
     fun cancel() {
         engine.cancel()

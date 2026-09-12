@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.chaquo.python.Python
+import com.videodl.app.data.MediaTarget
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -51,9 +52,11 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
     private fun resolveFormatArgs(opts: DownloadOptions): List<String> {
         // 用户在格式弹窗里挑过具体格式：直接照办（下载视频/仅音频按钮走的也是这条路）
         if (opts.formatSelector.isNotBlank()) {
-            val merge = opts.format.ifBlank { "mp4" }
             val args = mutableListOf("-f", opts.formatSelector)
-            if (merge != "mp3") args += listOf("--merge-output-format", merge)
+            // 音频产物是单条音轨，没有"合并"这一步，不要传 --merge-output-format
+            if (!MediaTarget.isAudio(opts.format, opts.quality)) {
+                args += listOf("--merge-output-format", opts.format.ifBlank { "mp4" })
+            }
             return args
         }
         val hasFfmpeg = opts.ffmpegLocation.isNotBlank() && File(opts.ffmpegLocation).exists()
@@ -61,8 +64,9 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
             return Format.resolve(opts.format, opts.quality, opts.platform)
         }
         return when {
-            opts.quality == "audio" || opts.format == "mp3" -> listOf("-f", "bestaudio/best")
-            // 挑不到 avc1 才退而求其次（没有 ffmpeg 就没法转码，只能尽量挑兼容的）
+            MediaTarget.isAudio(opts.format, opts.quality) ->
+                listOf("-f", "bestaudio[acodec^=mp4a]/bestaudio")
+            // 挑不到 avc1 才退而求其次（没有 ffmpeg 就没法合并，只能尽量挑兼容的）
             else -> listOf(
                 "-f",
                 "b[ext=${opts.format}][vcodec^=avc1]/b[ext=${opts.format}]/b",
@@ -93,30 +97,25 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
     }
 
     /**
-     * 代理决策（Android）。
+     * 代理决策（Android）：这里只负责**探测事实**（有没有 VPN、代理端口通不通），
+     * 决策本身交给纯函数 [ProxyResolver.resolve]，这样单测能直接覆盖真正生效的规则。
      *
      * 注意：手机上的代理 App（Clash / v2rayNG 等）通常在本机开一个 HTTP/SOCKS 端口，
      * 所以 **127.0.0.1 是合法地址**，不能像以前那样直接忽略。
-     *
-     *  - 检测到 VPN 隧道 → 直连（隧道自己会路由，再加代理等于绕两层）
-     *  - 强制代理 → 用配置地址；地址连不上就直连并说明原因（不静默失败）
-     *  - 自动 → 配了地址且连得上就用，否则直连
      */
     private fun resolveProxy(opts: DownloadOptions, vpnActive: Boolean): Pair<String?, String> {
-        if (vpnActive) return null to "已检测到 VPN，走隧道直连"
-        if (opts.proxyMode == "direct") return null to ""
         val url = opts.proxyUrl.trim()
-        if (url.isBlank()) {
-            return null to if (opts.proxyMode == "proxy") "强制代理但没填地址，已改为直连" else ""
-        }
-        val reachable = proxyReachable(url)
-        return when {
-            opts.proxyMode == "proxy" && reachable -> url to "使用代理 $url"
-            opts.proxyMode == "proxy" ->
-                null to "代理地址 $url 连不上（代理 App 没开？），本次改为直连"
-            reachable -> url to "自动：代理 $url 可用，走代理"
-            else -> null to ""
-        }
+        // 只在真正需要判断"通不通"时才去连端口，省掉一次无谓的连接尝试
+        val needProbe = !vpnActive && opts.proxyMode != "direct" && url.isNotBlank()
+        val reachable = needProbe && proxyReachable(url)
+        val d = ProxyResolver.resolve(
+            proxyMode = opts.proxyMode,
+            proxyUrl = url,
+            platform = opts.platform,
+            vpnActive = vpnActive,
+            proxyReachable = reachable,
+        )
+        return d.proxyUrl to d.note
     }
 
     /** 把 DownloadOptions 转成 yt-dlp args_list；第二个返回值是给用户看的代理说明 */
@@ -234,7 +233,7 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
                 val res = JSONObject(resultStr)
                 val err = res.optString("error", "")
                 if (cancelled || err == "__CANCELLED__") {
-                    send(DownloadEvent.Error("用户取消"))
+                    send(DownloadEvent.Cancelled)
                 } else if (res.getBoolean("ok")) {
                     send(DownloadEvent.Finished(res.getString("path")))
                 } else {

@@ -20,6 +20,9 @@
     <string name="format_mp4">MP4</string>
     <string name="format_webm">WebM</string>
     <string name="format_mp3">MP3</string>
+    <!-- 音频产物实际是 m4a 不是 mp3：打包的 ffmpeg 没有 libmp3lame（见 README 已知问题），
+         mp3 转不出来。源音轨是 AAC 时 m4a 走 copy，不需要任何编码器。 -->
+    <string name="format_m4a">M4A（仅音频）</string>
     <string name="quality_best">最佳</string>
     <string name="quality_1080p">1080p</string>
     <string name="quality_720p">720p</string>
@@ -61,6 +64,8 @@
     <string name="notif_downloading_title">VideoDL 下载中</string>
     <string name="notif_complete_title">下载完成</string>
     <string name="notif_error_title">下载失败</string>
+    <string name="notif_cancelled_title">已取消</string>
+    <string name="notif_cancelled_text">已取消当前下载</string>
 
     <!-- 相册 -->
     <string name="hint_in_gallery">已存入系统相册（Movies/VideoDL），可直接在相册或剪映里打开</string>

@@ -27,6 +27,46 @@ object Naming {
     /** 仅保留安全文件名字符（与桌面版 re.sub(r'[\\/:*?"<>|]', '_', title) 对应）*/
     fun sanitize(title: String): String =
         title.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+
+    /**
+     * yt-dlp 的中间产物后缀：`f137.mp4`（分片）、`part` / `part-FragN`、`ytdl`、`temp`。
+     * 只认这些形状，别的都不动。
+     */
+    private val PARTIAL_SUFFIX = Regex("^(f\\d+\\.|part|ytdl|temp)")
+
+    /**
+     * 判断 [fileName] 是不是本次下载留下的中间产物。
+     *
+     * **必须用完整输出名（含扩展名）做前缀**，不能用视频标题：
+     * 标题是用户可见的短词，而落地目录可能是用户自己选的保存目录，
+     * 按标题前缀清理会把该目录下所有同名开头的文件一起删掉
+     * （失败一次「猫」就带走早就下好的「猫和老鼠.mp4」）。这是真实发生过的数据丢失。
+     *
+     * 三种命中，都要求**点号边界**，所以「猫.mp4」匹配不到「猫和老鼠.mp4」，
+     * 也匹配不到用户自己命名的「猫.mp4 备份.mp4」：
+     *   - 名字就是本次输出文件本身（失败时可能留下一个空壳）
+     *   - 「猫.mp4.part」「猫.mp4.compat.mp4」：输出名 + 点号 + 后缀
+     *   - 「猫.f137.mp4」「猫.f140.m4a」「猫.part」：yt-dlp 合并前按**主干**命名的分片，
+     *     后缀形状受限（见 [PARTIAL_SUFFIX]），不是"点号后面什么都删"
+     */
+    fun isPartialOf(fileName: String, outputFileNames: List<String>): Boolean =
+        outputFileNames.any { name ->
+            when {
+                // 必须传带扩展名的完整文件名。传了个裸标题（没有点号）就当作"不可用"，
+                // 宁可什么都不匹配、少删一点，也不要退化成按标题前缀乱删。
+                name.isBlank() || '.' !in name -> false
+                fileName == name -> true
+                fileName.startsWith("$name.") -> true
+                else -> {
+                    val stem = name.substringBeforeLast('.')
+                    if (fileName.startsWith("$stem.")) {
+                        PARTIAL_SUFFIX.containsMatchIn(fileName.removePrefix("$stem."))
+                    } else {
+                        false
+                    }
+                }
+            }
+        }
 }
 
 object FileRepository {
@@ -39,7 +79,7 @@ object FileRepository {
     /** 用标题/名称 + 格式画质构建不冲突的输出路径（与桌面版命名一致） */
     fun buildOutputPath(baseDir: String, baseName: String, format: String, quality: String): String {
         val safeBase = Naming.sanitize(baseName).ifBlank { "video" }
-        val ext = if (format == "mp3" || quality == "audio") "mp3" else format
+        val ext = MediaTarget.ext(format, quality)
         val existing = File(baseDir).listFiles()?.map { it.name }?.toSet() ?: emptySet()
         return Naming.nextFilePath(baseDir, safeBase, ext, existing)
     }

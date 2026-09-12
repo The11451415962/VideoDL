@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import com.videodl.app.service.DownloadService
 import com.videodl.app.ui.home.EXTRA_SHARE_STARTED
 import com.videodl.app.ui.home.EXTRA_SHARE_URL
+import com.videodl.app.util.extractUrl
 
 /**
  * 系统分享直达入口。
@@ -34,15 +35,5 @@ class ShareReceiver : ComponentActivity() {
         }
         runCatching { startActivity(forward) }
         finish()
-    }
-
-    /** 与桌面版 extract_url_from_text 1:1 对应 */
-    private fun extractUrl(text: String): String {
-        val t = text.trim()
-        if (t.startsWith("http")) return t.trimEnd('。', '．', '.', '，', ',', '/', '\\')
-        Regex("https?://\\S+").find(t)?.let {
-            return it.value.trimEnd('。', '．', '.', '，', ',', '/', '\\')
-        }
-        return ""
     }
 }

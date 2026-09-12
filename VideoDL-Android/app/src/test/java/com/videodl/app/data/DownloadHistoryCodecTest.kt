@@ -1,6 +1,7 @@
 package com.videodl.app.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -62,5 +63,23 @@ class DownloadHistoryCodecTest {
         val decoded = DownloadHistory.decode(DownloadHistory.encode(list))
         assertEquals("new", decoded[0].id)
         assertTrue(decoded.size == 2)
+    }
+
+    @Test fun roundTrip_keepsAudioFlag() {
+        val audio = record("7").copy(formatLabel = "仅音频 · m4a", isAudio = true)
+        val decoded = DownloadHistory.decode(DownloadHistory.encode(listOf(audio)))
+        assertTrue("音频标记必须存下来，界面筛选靠它", decoded[0].isAudio)
+    }
+
+    @Test fun decode_legacyRecord_infersAudioFromOldLabel() {
+        // 老版本没有 audio 字段，靠 formatLabel 里有没有 mp3 判断，别把历史音频归到视频
+        val old = DownloadHistory.decode("""[{"id":"1","format":"仅音频 · mp3","status":"done"}]""")
+        assertTrue(old[0].isAudio)
+    }
+
+    @Test fun decode_legacyVideoRecord_isNotAudio() {
+        // "mp4" 不能被误判成音频：它既不含 mp3 也不含 m4a
+        val old = DownloadHistory.decode("""[{"id":"1","format":"1080p · mp4","status":"done"}]""")
+        assertFalse(old[0].isAudio)
     }
 }

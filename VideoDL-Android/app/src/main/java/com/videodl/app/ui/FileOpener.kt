@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.videodl.app.data.MediaTarget
 import java.io.File
 
 /**
@@ -14,7 +15,7 @@ import java.io.File
 internal fun openFile(ctx: Context, target: String) {
     try {
         val mime = when {
-            target.endsWith(".mp3", true) -> "audio/mpeg"
+            target.endsWith(".m4a", true) || target.endsWith(".mp3", true) -> MediaTarget.AUDIO_MIME
             target.endsWith(".webm", true) -> "video/webm"
             else -> "video/*"
         }

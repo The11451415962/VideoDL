@@ -13,6 +13,9 @@ sealed class DownloadEvent {
     data class Log(val line: String) : DownloadEvent()
     data class Finished(val filePath: String) : DownloadEvent()
     data class Error(val message: String) : DownloadEvent()
+
+    /** 用户主动取消。和 [Error] 分开，否则「点了停止」会被报成「下载失败」。 */
+    object Cancelled : DownloadEvent()
 }
 
 /** 抓取结果的完整信息：结果卡片（缩略图/标题/时长）+ 格式弹窗都用它 */

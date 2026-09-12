@@ -88,8 +88,10 @@ fun DownloadsScreen(onOpenFile: (String) -> Unit) {
 
     val shown = remember(records, filter) {
         when (filter) {
-            "video" -> records.filter { !it.formatLabel.contains("mp3") && it.status == "done" }
-            "audio" -> records.filter { it.formatLabel.contains("mp3") }
+            // 用记录里显式存的 isAudio，不再靠 formatLabel 里有没有 "mp3" 去猜
+            // （音频产物已经不叫 mp3 了，猜的结果是把音频归到"视频"里）
+            "video" -> records.filter { !it.isAudio && it.status == "done" }
+            "audio" -> records.filter { it.isAudio }
             else -> records
         }
     }
@@ -141,8 +143,9 @@ fun DownloadsScreen(onOpenFile: (String) -> Unit) {
             }
             if (dl.queued.isNotEmpty()) {
                 item { SectionLabel("队列（${dl.queued.size}）") }
-                items(dl.queued, key = { "q-${it.url}" }) { q ->
-                    QueuedCard(q, onRemove = { DownloadService.dropQueued(ctx, q.url) })
+                // key 用每项自己的 id，不能用 url：同一个链接排两次会撞 key 直接崩
+                items(dl.queued, key = { "q-${it.id}" }) { q ->
+                    QueuedCard(q, onRemove = { DownloadService.dropQueued(ctx, q.id) })
                 }
             }
             if (shown.isEmpty() && dl.status == DownloadStatus.Idle && dl.queued.isEmpty()) {

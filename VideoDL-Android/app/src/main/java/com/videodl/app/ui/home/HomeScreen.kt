@@ -236,8 +236,10 @@ fun HomeScreen(
             }
         }
 
-        // 当前下载
-        if (state.busy || state.status == DownloadStatus.Done || state.status == DownloadStatus.Error) {
+        // 当前下载（已取消也短暂显示一下，让用户知道「停止」生效了）
+        if (state.busy || state.status == DownloadStatus.Done ||
+            state.status == DownloadStatus.Error || state.status == DownloadStatus.Cancelled
+        ) {
             Spacer(Modifier.height(12.dp))
             DownloadStatusCard(
                 status = state.status,
@@ -300,6 +302,7 @@ private fun DownloadStatusCard(
         DownloadStatus.Downloading -> "下载中"
         DownloadStatus.Done -> "下载完成"
         DownloadStatus.Error -> "下载失败"
+        DownloadStatus.Cancelled -> "已取消"
     }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {

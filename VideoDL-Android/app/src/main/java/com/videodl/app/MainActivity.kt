@@ -16,6 +16,7 @@ import com.videodl.app.ui.home.EXTRA_SHARE_URL
 import com.videodl.app.ui.home.HomeViewModel
 import com.videodl.app.ui.openFile
 import com.videodl.app.ui.theme.VideoDLTheme
+import com.videodl.app.util.extractUrl
 
 class MainActivity : ComponentActivity() {
 
@@ -68,13 +69,5 @@ class MainActivity : ComponentActivity() {
         // ShareReceiver 通常已经直接启动了下载，这里只回填输入框，避免下两遍
         val startedByReceiver = intent.getBooleanExtra(EXTRA_SHARE_STARTED, false)
         if (url.isNotBlank()) homeVm.consumeSharedUrl(url, startNow = !startedByReceiver)
-    }
-
-    /** 与桌面版 _extract_url_from_text 1:1 对应 */
-    private fun extractUrl(text: String): String {
-        val t = text.trim()
-        if (t.startsWith("http")) return t.trimEnd('。', '．', '.', '，', ',', '/', '\\')
-        Regex("https?://\\S+").find(t)?.let { return it.value.trimEnd('。', '．', '.', '，', ',', '/', '\\') }
-        return ""
     }
 }
