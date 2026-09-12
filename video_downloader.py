@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import threading
 import tkinter as tk
+import queue
 from tkinter import filedialog, ttk, messagebox
 from datetime import datetime
 
@@ -357,6 +358,34 @@ def output_ext(fmt: str, quality: str) -> str:
     return "mp3" if (fmt == "mp3" or quality == "audio") else fmt
 
 
+# Windows 保留设备名：以这些名字命名的文件会创建失败
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def safe_filename(title: str, max_len: int = 120) -> str:
+    """把视频标题变成能在 Windows/安卓上安全落盘的文件名。
+
+    旧实现只替换了非法字符，漏掉了三类会让写入直接失败或超长的情况：
+      · 结尾的点和空格（Windows 不允许）
+      · 保留设备名（CON/NUL/COM1…）
+      · 控制字符与超长（含路径可能超过 MAX_PATH）
+    """
+    name = re.sub(r'[\\/:*?"<>|]', "_", title or "")
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
+    name = name.strip().rstrip(". ")
+    if not name:
+        return "video"
+    # 保留名带扩展名同样被 Windows 拒绝（NUL.mp4 也不行），所以取第一段判断
+    if name.split(".")[0].upper() in _WIN_RESERVED:
+        name = f"_{name}"
+    name = name[:max_len].rstrip(". ")
+    return name or "video"
+
+
 # --------------- yt-dlp 命令组装 ---------------
 def build_ytdlp_command(url: str, output_path: str, config: dict,
                         ffmpeg_path: str | None = None) -> list[str]:
@@ -367,7 +396,10 @@ def build_ytdlp_command(url: str, output_path: str, config: dict,
     quality = config.get("default_quality", "best")
 
     platform = detect_platform(url)
-    cmd = [YTDLP_PATH, url, "-o", output_path]
+    # 注意顺序：所有选项必须在 "--" 之前，URL 必须紧跟在 "--" 之后。
+    # 反过来写会把 -o/--newline 这些也当成 URL（实测直接把下载搞崩）。
+    # 这样手输的 "-U"/"--exec ..." 之类字符串不会被当选项执行（CWE-88 参数注入）。
+    cmd = ["-o", output_path]
     cmd.extend(resolve_format_string(fmt, quality, platform))
 
     # Bilibili 需要 Referer + Origin 请求头，否则 CDN 返回 HTTP 412
@@ -397,7 +429,9 @@ def build_ytdlp_command(url: str, output_path: str, config: dict,
         cmd.extend(["--ffmpeg-location", ffmpeg_path])
 
     cmd.extend(["--newline", "--no-playlist", "--playlist-items", "1"])
-    return cmd
+    # URL 走最后，用 "--" 隔断选项解析
+    cmd.extend(["--", url])
+    return [YTDLP_PATH] + cmd
 
 
 def get_today_folder(base_dir: str) -> tuple[str, str]:
@@ -530,7 +564,8 @@ def _run_transcode(ffmpeg_path, src, tmp, extra, total, progress_cb, cancel_chec
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, startupinfo=_startupinfo(),
+            text=True, encoding="utf-8", errors="replace",
+            bufsize=1, startupinfo=_startupinfo(),
         )
     except Exception as e:
         return 127, [f"无法启动 ffmpeg: {e}"]
@@ -666,7 +701,7 @@ class Downloader:
         title = info.get("title")
         if not title:
             return
-        safe_title = re.sub(r'[\\/:*?"<>|]', '_', title).strip()
+        safe_title = safe_filename(title)
         if not safe_title:
             return
         target_dir = os.path.dirname(self.output_path)
@@ -681,7 +716,6 @@ class Downloader:
         self.log_cb("[信息] 正在获取视频信息...")
         platform = detect_platform(self.url)
         cmd = [
-            YTDLP_PATH, self.url,
             "--dump-json",
             "--no-playlist", "--playlist-items", "1",
         ]
@@ -705,11 +739,14 @@ class Downloader:
             browser = self.config.get("cookie_browser", "chrome")
             cmd.extend(["--cookies-from-browser", browser])
 
+        # 选项在前、URL 最后，用 "--" 隔断（同 build_ytdlp_command）
+        cmd.extend(["--", self.url])
+
         si = _startupinfo()
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, startupinfo=si,
+                [YTDLP_PATH] + cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", startupinfo=si,
             )
             self._proc = proc
             out, err = proc.communicate(timeout=60)
@@ -758,6 +795,8 @@ class Downloader:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",      # 中文标题/emoji 不会再让读取线程抛解码异常
                 bufsize=1,
                 startupinfo=si,
             )
@@ -767,24 +806,43 @@ class Downloader:
 
         pattern = re.compile(r"\[download\]\s+(\d+\.?\d*)%")
         last_pct = -1.0
+        rc = -1
 
-        for line in self._proc.stdout:
-            line_stripped = line.strip()
-            if line_stripped:
-                self.log_cb(line_stripped)
-                self._output_lines.append(line_stripped)  # 收集用于诊断
-            m = pattern.search(line_stripped) if line_stripped else None
-            if m:
+        # 整个读取过程必须有 try/finally：否则一旦读输出出错，工作线程会静默死掉，
+        # done_cb 永不触发 → 按钮全灰、"停止下载"一直亮着，只能重启程序。
+        try:
+            for line in self._proc.stdout:
+                line_stripped = line.strip()
+                if line_stripped:
+                    self.log_cb(line_stripped)
+                    self._output_lines.append(line_stripped)  # 收集用于诊断
+                m = pattern.search(line_stripped) if line_stripped else None
+                if m:
+                    try:
+                        pct = float(m.group(1))
+                    except ValueError:
+                        continue
+                    if abs(pct - last_pct) > 0.01:
+                        last_pct = pct
+                        self.progress_cb(pct)
+            rc = self._proc.wait()
+        except Exception as e:
+            self.log_cb(f"[错误] 读取下载输出失败：{e}")
+            rc = -1
+        finally:
+            proc, self._proc = self._proc, None
+            if proc is not None:
                 try:
-                    pct = float(m.group(1))
-                except ValueError:
-                    continue
-                if abs(pct - last_pct) > 0.01:
-                    last_pct = pct
-                    self.progress_cb(pct)
-
-        rc = self._proc.wait()
-        self._proc = None
+                    if proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass
+                for stream in (proc.stdout, proc.stderr):
+                    try:
+                        if stream is not None:
+                            stream.close()
+                    except Exception:
+                        pass
 
         if self._cancelled:
             # 用户主动停止，不弹错误诊断框
@@ -807,8 +865,11 @@ class Downloader:
             self.log_cb(f"[错误] yt-dlp 退出码：{rc}")
             # 生成诊断报告并回调
             if self.error_cb:
-                report = diagnose(self._output_lines)
-                self.error_cb(report)
+                try:
+                    report = diagnose(self._output_lines)
+                    self.error_cb(report)
+                except Exception as e:
+                    self.log_cb(f"[警告] 生成诊断报告失败：{e}")
             self.done_cb(False, f"下载失败，退出码：{rc}")
 
     def cancel(self):
@@ -828,12 +889,15 @@ def update_ytdlp(callback):
         callback("找不到 yt-dlp.exe，无法更新。")
         return
 
+    proc = None
     try:
         proc = subprocess.Popen(
             [YTDLP_PATH, "-U"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             startupinfo=_startupinfo(),
         )
         out, _ = proc.communicate(timeout=120)
@@ -841,7 +905,20 @@ def update_ytdlp(callback):
             callback(f"更新成功！\n{out.strip()[-300:]}")
         else:
             callback(f"更新失败（退出码 {proc.returncode}）\n{out.strip()[-300:]}")
+    except subprocess.TimeoutExpired:
+        # 超时后必须收掉子进程：否则留下孤儿进程，按钮也会一直是"更新中…"
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        callback("更新超时（网络慢时 -U 可能超过 2 分钟），请稍后重试。")
     except Exception as e:
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
         callback(f"更新出错：{e}")
 
 
@@ -1233,6 +1310,8 @@ class App(tk.Tk):
 
         self._dl: Downloader | None = None
         self._thread: threading.Thread | None = None
+        # 工作线程 → 界面的唯一通道：只入队，主线程统一派发（见 _post / _drain_ui）
+        self._ui_queue: queue.Queue = queue.Queue()
 
         apply_theme(self)
         self._build_ui()
@@ -1240,6 +1319,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # 启动后检查依赖并给出提示
+        self.after(80, self._drain_ui)
         self.after(100, self._startup_check)
 
     def _startup_check(self):
@@ -1256,23 +1336,64 @@ class App(tk.Tk):
             if ff_warn:
                 self._log(f"[警告] {ff_warn}")
 
+    # --------------- 线程 → 界面：统一队列 ---------------
+    def _post(self, fn, *args):
+        """把"要在主线程执行的界面动作"放进队列。
+
+        工作线程绝不直接碰 Tk（连 after() 也不能碰：Tcl 不是线程安全的，
+        实测从工作线程 after() 会把解释器状态搞坏）。
+        """
+        try:
+            self._ui_queue.put((fn, args))
+        except Exception:
+            pass
+
+    def _drain_ui(self):
+        """主线程定时把队列里的界面动作执行掉。"""
+        try:
+            while True:
+                fn, args = self._ui_queue.get_nowait()
+                try:
+                    fn(*args)
+                except tk.TclError:
+                    return          # 窗口没了，停止处理
+                except Exception as e:
+                    print(f"[警告] 界面更新失败：{e}")
+        except queue.Empty:
+            pass
+        finally:
+            try:
+                if self.winfo_exists():
+                    self.after(80, self._drain_ui)
+            except tk.TclError:
+                pass                # 窗口已销毁
+
     # --------------- 日志输出 ---------------
     def _log(self, msg: str):
-        """追加一行到日志框，并按级别着色（时间戳灰、正文按类型）。"""
-        self.log_text.configure(state=tk.NORMAL)
-        ts = datetime.now().strftime("%H:%M:%S")
-        if msg.startswith(("[错误", "[失败")):
-            tag = "err"
-        elif msg.startswith("[警告"):
-            tag = "warn"
-        elif msg.startswith("[完成"):
-            tag = "ok"
-        else:
-            tag = "info"
-        self.log_text.insert(tk.END, f"[{ts}] ", "info")
-        self.log_text.insert(tk.END, msg + "\n", tag)
-        self.log_text.see(tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+        """线程安全的日志入口：入队，由主线程写控件。"""
+        self._post(self._append_log_line, msg)
+
+    def _append_log_line(self, msg: str):
+        """真正操作控件（只在主线程调用），按级别着色（时间戳灰、正文按类型）。"""
+        try:
+            self.log_text.configure(state=tk.NORMAL)
+            ts = datetime.now().strftime("%H:%M:%S")
+            if msg.startswith(("[错误", "[失败")):
+                tag = "err"
+            elif msg.startswith("[警告"):
+                tag = "warn"
+            elif msg.startswith("[完成"):
+                tag = "ok"
+            else:
+                tag = "info"
+            self.log_text.insert(tk.END, f"[{ts}] ", "info")
+            self.log_text.insert(tk.END, msg + "\n", tag)
+            self.log_text.see(tk.END)
+            self.log_text.configure(state=tk.DISABLED)
+        except tk.TclError:
+            pass   # 窗口已关闭
+        except Exception as e:
+            print(f"[警告] 写日志失败：{e}")
 
     # --------------- UI 构建 ---------------
     def _build_ui(self):
@@ -1571,7 +1692,7 @@ class App(tk.Tk):
 
     # --------------- 视频信息回调 ---------------
     def _on_info(self, info: dict):
-        self.after(0, lambda: self._update_info_ui(info))
+        self._post(self._update_info_ui, info)
 
     def _update_info_ui(self, info: dict):
         title = info.get("title", "?")
@@ -1597,7 +1718,7 @@ class App(tk.Tk):
 
     # --------------- 进度回调 ---------------
     def _on_progress(self, pct: float):
-        self.after(0, lambda: self._update_progress_ui(pct))
+        self._post(self._update_progress_ui, pct)
 
     def _update_progress_ui(self, pct: float):
         self.progress_var.set(pct)
@@ -1606,11 +1727,11 @@ class App(tk.Tk):
     # --------------- 错误报告回调 ---------------
     def _on_error_report(self, report: dict):
         """下载失败时弹出诊断报告对话框。"""
-        self.after(0, lambda: ErrorReportDialog(self, report))
+        self._post(lambda: ErrorReportDialog(self, report))
 
     # --------------- 完成回调 ---------------
     def _on_done(self, ok: bool, msg: str):
-        self.after(0, lambda: self._handle_done(ok, msg))
+        self._post(self._handle_done, ok, msg)
 
     def _handle_done(self, ok: bool, msg: str):
         self._set_ui_state(tk.NORMAL)
@@ -1645,7 +1766,7 @@ class App(tk.Tk):
         t.start()
 
     def _on_update_done(self, msg: str):
-        self.after(0, lambda: self._handle_update_done(msg))
+        self._post(self._handle_update_done, msg)
 
     def _handle_update_done(self, msg: str):
         self.btn_update.config(state=tk.NORMAL, text="🔄 更新核心")
@@ -1674,4 +1795,17 @@ class App(tk.Tk):
 # 入口
 # ============================================================
 if __name__ == "__main__":
-    App().mainloop()
+    try:
+        App().mainloop()
+    except Exception:
+        # 没有顶层兜底的话，双击运行时会"一闪而过"，用户什么都看不到
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("程序启动失败", f"发生错误：\n\n{tb[-1500:]}")
+            root.destroy()
+        except Exception:
+            pass
