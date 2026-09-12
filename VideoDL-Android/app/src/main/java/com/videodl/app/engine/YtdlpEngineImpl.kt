@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 class YtdlpEngineImpl(context: Context) : YtdlpEngine {
@@ -48,6 +49,13 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
 
     /** 无 ffmpeg 时不合并/不转码，只下单个带声音的文件（否则会报 ffmpeg not installed） */
     private fun resolveFormatArgs(opts: DownloadOptions): List<String> {
+        // 用户在格式弹窗里挑过具体格式：直接照办（下载视频/仅音频按钮走的也是这条路）
+        if (opts.formatSelector.isNotBlank()) {
+            val merge = opts.format.ifBlank { "mp4" }
+            val args = mutableListOf("-f", opts.formatSelector)
+            if (merge != "mp3") args += listOf("--merge-output-format", merge)
+            return args
+        }
         val hasFfmpeg = opts.ffmpegLocation.isNotBlank() && File(opts.ffmpegLocation).exists()
         if (hasFfmpeg) {
             return Format.resolve(opts.format, opts.quality, opts.platform)
@@ -62,32 +70,74 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         }
     }
 
-    /** 把 DownloadOptions 转成 yt-dlp args_list（复用 Task 3 已翻译的 Format / Proxy / Platform） */
-    private fun buildArgs(opts: DownloadOptions): List<String> {
+    /** 从 http://host:port 取出主机与端口；没有端口时按常见 HTTP 代理端口 7890 处理 */
+    private fun proxyHostPort(proxyUrl: String): Pair<String, Int>? = try {
+        val u = java.net.URI(if (proxyUrl.contains("://")) proxyUrl else "http://$proxyUrl")
+        val host = u.host
+        if (host.isNullOrBlank()) null else host to (if (u.port > 0) u.port else 7890)
+    } catch (e: Exception) {
+        null
+    }
+
+    /** 代理端口是否真的有人监听（手机上的 Clash/v2rayNG 一般在本机开端口） */
+    private fun proxyReachable(proxyUrl: String): Boolean {
+        val hp = proxyHostPort(proxyUrl) ?: return false
+        return try {
+            java.net.Socket().use { s ->
+                s.connect(java.net.InetSocketAddress(hp.first, hp.second), 400)
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 代理决策（Android）。
+     *
+     * 注意：手机上的代理 App（Clash / v2rayNG 等）通常在本机开一个 HTTP/SOCKS 端口，
+     * 所以 **127.0.0.1 是合法地址**，不能像以前那样直接忽略。
+     *
+     *  - 检测到 VPN 隧道 → 直连（隧道自己会路由，再加代理等于绕两层）
+     *  - 强制代理 → 用配置地址；地址连不上就直连并说明原因（不静默失败）
+     *  - 自动 → 配了地址且连得上就用，否则直连
+     */
+    private fun resolveProxy(opts: DownloadOptions, vpnActive: Boolean): Pair<String?, String> {
+        if (vpnActive) return null to "已检测到 VPN，走隧道直连"
+        if (opts.proxyMode == "direct") return null to ""
+        val url = opts.proxyUrl.trim()
+        if (url.isBlank()) {
+            return null to if (opts.proxyMode == "proxy") "强制代理但没填地址，已改为直连" else ""
+        }
+        val reachable = proxyReachable(url)
+        return when {
+            opts.proxyMode == "proxy" && reachable -> url to "使用代理 $url"
+            opts.proxyMode == "proxy" ->
+                null to "代理地址 $url 连不上（代理 App 没开？），本次改为直连"
+            reachable -> url to "自动：代理 $url 可用，走代理"
+            else -> null to ""
+        }
+    }
+
+    /** 把 DownloadOptions 转成 yt-dlp args_list；第二个返回值是给用户看的代理说明 */
+    private fun buildArgs(opts: DownloadOptions): Pair<List<String>, String> {
         val args = resolveFormatArgs(opts).toMutableList()
         if (opts.platform == "Bilibili") {
             args += listOf("--add-header", "Referer:https://www.bilibili.com/",
                           "--add-header", "Origin:https://www.bilibili.com")
         }
-        // 代理策略（Android 版）：
-        // - VPN 开启 → 直连（隧道自动路由）
-        // - 强制代理(proxy) 且地址不是本机 → 用该地址
-        // - 其余(auto/direct) → 直连（手机上 VPN 是透明的；127.0.0.1 是桌面端默认值，在手机上是无效的）
         val vpnActive = isVpnActive()
-        if (!vpnActive && opts.proxyMode == "proxy") {
-            val p = opts.proxyUrl
-            if (p.isNotBlank() && !p.contains("127.0.0.1") && !p.contains("localhost")) {
-                args += listOf("--proxy", p)
-            }
-        }
-        Log.d(TAG, "buildArgs: vpnActive=$vpnActive proxyMode=${opts.proxyMode} platform=${opts.platform} ffmpeg=${opts.ffmpegLocation}")
+        val (proxy, note) = resolveProxy(opts, vpnActive)
+        if (proxy != null) args += listOf("--proxy", proxy)
+        Log.d(TAG, "buildArgs: vpnActive=$vpnActive proxyMode=${opts.proxyMode} proxy=${proxy ?: "-"} platform=${opts.platform} ffmpeg=${opts.ffmpegLocation}")
         resolveCookieFile(opts)?.let { args += listOf("--cookies", it.absolutePath) }
         args += listOf("--newline", "--no-playlist", "--playlist-items", "1")
-        return args
+        return args to note
     }
 
     override fun fetchInfo(url: String, options: DownloadOptions): DownloadEvent.Info {
-        val args = buildArgs(options)
+        val (args, proxyNote) = buildArgs(options)
+        if (proxyNote.isNotBlank()) Log.d(TAG, "proxy: $proxyNote")
         Log.d(TAG, "fetchInfo: $url")
         val jsonStr = bridge.callAttr("fetch_info", url, args.toTypedArray()).toString()
         Log.d(TAG, "fetchInfo result: $jsonStr")
@@ -103,11 +153,51 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
             uploader = obj.optString("uploader", "未知"),
             duration = obj.optInt("duration", 0),
             resolution = if (w > 0) "${w}x${h}" else "?",
+            thumbnail = obj.optString("thumbnail", ""),
+        )
+    }
+
+    override fun fetchDetail(url: String, options: DownloadOptions): MediaDetail {
+        val (args, _) = buildArgs(options)
+        Log.d(TAG, "fetchDetail: $url")
+        val jsonStr = bridge.callAttr("list_formats", url, args.toTypedArray()).toString()
+        val obj = JSONObject(jsonStr)
+        if (obj.has("error")) throw RuntimeException(obj.getString("error"))
+        val arr = obj.optJSONArray("formats") ?: JSONArray()
+        val out = ArrayList<FormatOption>(arr.length())
+        for (i in 0 until arr.length()) {
+            val f = arr.optJSONObject(i) ?: continue
+            val height = f.optInt("height", 0)
+            val id = f.optString("id")
+            val audioOnly = f.optBoolean("audio_only", false)
+            out += FormatOption(
+                id = id,
+                label = if (audioOnly) "仅音频" else if (height > 0) "${height}p" else id,
+                note = f.optString("note"),
+                ext = f.optString("ext"),
+                vcodec = f.optString("vcodec"),
+                acodec = f.optString("acodec"),
+                height = height,
+                fps = f.optInt("fps", 0),
+                sizeBytes = f.optLong("filesize", 0L),
+                tbr = f.optDouble("tbr", 0.0),
+                abr = f.optDouble("abr", 0.0),
+                audioOnly = audioOnly,
+            )
+        }
+        Log.d(TAG, "fetchDetail -> ${out.size} 个格式")
+        return MediaDetail(
+            title = obj.optString("title", "未知标题"),
+            uploader = obj.optString("uploader", ""),
+            duration = obj.optInt("duration", 0),
+            thumbnail = obj.optString("thumbnail", ""),
+            formats = out,
         )
     }
 
     override fun download(options: DownloadOptions): Flow<DownloadEvent> = callbackFlow {
-        val args = buildArgs(options)
+        val (args, proxyNote) = buildArgs(options)
+        if (proxyNote.isNotBlank()) trySend(DownloadEvent.Log("[提示] $proxyNote"))
         cancelled = false
         // 注册 Kotlin→Python 回调（字符串 JSON 回调,见 Task 5 bridge）
         bridge.callAttr("set_hooks",

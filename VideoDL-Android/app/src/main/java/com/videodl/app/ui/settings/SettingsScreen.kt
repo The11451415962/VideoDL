@@ -64,22 +64,19 @@ fun SettingsScreen(
         uri?.let { vm.onCookieFilePicked(it) }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.btn_back))
-                    }
+    // 外层 VideoDlApp 已有 Scaffold（含底部导航），这里不再嵌套，避免顶部重复留白
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(stringResource(R.string.settings_title)) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.btn_back))
                 }
-            )
-        }
-    ) { padding ->
+            },
+        )
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState())
         ) {

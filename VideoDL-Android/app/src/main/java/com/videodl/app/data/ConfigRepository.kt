@@ -34,7 +34,7 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
     private fun Preferences.toConfig(): AppConfig = AppConfig(
         saveDirUri = this[Keys.SAVE_DIR] ?: "",
         proxyMode = this[Keys.PROXY_MODE] ?: "auto",
-        proxyUrl = this[Keys.PROXY_URL] ?: "http://127.0.0.1:7897",
+        proxyUrl = this[Keys.PROXY_URL] ?: "http://127.0.0.1:7890",
         cookieMode = this[Keys.COOKIE_MODE] ?: "none",
         cookiePathUri = this[Keys.COOKIE_PATH] ?: "",
         defaultFormat = this[Keys.FORMAT] ?: "mp4",

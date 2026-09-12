@@ -11,6 +11,7 @@ data class VideoInfo(
     val uploader: String,
     val duration: Int,
     val resolution: String,
+    val thumbnail: String = "",
 )
 
 enum class DownloadStatus { Idle, Fetching, Downloading, Done, Error }

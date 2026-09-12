@@ -43,7 +43,7 @@
     <string name="settings_choose_dir">选择目录</string>
     <string name="settings_proxy_mode">代理模式</string>
     <string name="settings_proxy_url">代理地址</string>
-    <string name="settings_proxy_url_hint">http://127.0.0.1:7897</string>
+    <string name="settings_proxy_url_hint">http://127.0.0.1:7890（Clash 默认；v2rayNG 常用 10809）</string>
     <string name="settings_cookie_mode">Cookie 模式</string>
     <string name="settings_cookie_path">Cookie 文件路径</string>
     <string name="settings_cookie_browse">选择文件</string>

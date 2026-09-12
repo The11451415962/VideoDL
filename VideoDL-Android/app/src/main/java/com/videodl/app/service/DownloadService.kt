@@ -21,11 +21,14 @@ import com.videodl.app.MainApplication
 import com.videodl.app.R
 import com.videodl.app.data.ConfigRepositoryImpl
 import com.videodl.app.data.DownloadCenter
+import com.videodl.app.data.DownloadHistory
+import com.videodl.app.data.DownloadRecord
 import com.videodl.app.data.DownloadStatus
 import com.videodl.app.data.FileRepository
 import com.videodl.app.data.VideoInfo
 import com.videodl.app.engine.DownloadEvent
 import com.videodl.app.engine.DownloadOptions
+import com.videodl.app.engine.FormatOption
 import com.videodl.app.engine.Platform
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +53,11 @@ class DownloadService : Service() {
     private var job: Job? = null
     private var lastNotify = 0L
 
+    /** 当前这一次下载的展示信息，成功后写进下载记录 */
+    private var currentTitle = ""
+    private var currentThumb = ""
+    private var currentFormatLabel = ""
+
     companion object {
         private const val TAG = "VideoDL"
         private const val CHANNEL_ID = "download"
@@ -61,6 +69,7 @@ class DownloadService : Service() {
         const val EXTRA_FORMAT = "format"
         const val EXTRA_QUALITY = "quality"
         const val EXTRA_PROXY = "proxy"
+        const val EXTRA_SELECTOR = "selector"
 
         fun start(
             ctx: Context,
@@ -68,6 +77,7 @@ class DownloadService : Service() {
             format: String = "",
             quality: String = "",
             proxyMode: String = "",
+            selector: String = "",
         ) {
             val intent = Intent(ctx, DownloadService::class.java).apply {
                 action = ACTION_START
@@ -75,6 +85,7 @@ class DownloadService : Service() {
                 putExtra(EXTRA_FORMAT, format)
                 putExtra(EXTRA_QUALITY, quality)
                 putExtra(EXTRA_PROXY, proxyMode)
+                putExtra(EXTRA_SELECTOR, selector)
             }
             ContextCompat.startForegroundService(ctx, intent)
         }
@@ -112,6 +123,7 @@ class DownloadService : Service() {
                         intent.getStringExtra(EXTRA_FORMAT).orEmpty(),
                         intent.getStringExtra(EXTRA_QUALITY).orEmpty(),
                         intent.getStringExtra(EXTRA_PROXY).orEmpty(),
+                        intent.getStringExtra(EXTRA_SELECTOR).orEmpty(),
                     )
                 }
             }
@@ -136,6 +148,7 @@ class DownloadService : Service() {
         formatArg: String,
         qualityArg: String,
         proxyArg: String,
+        selectorArg: String,
     ) {
         val engine = (application as MainApplication).engine
         val config = ConfigRepositoryImpl(this).configFlow.first()
@@ -165,6 +178,7 @@ class DownloadService : Service() {
             quality = quality,
             platform = Platform.detect(url),
             ffmpegLocation = FileRepository.ffmpegLocation(this),
+            formatSelector = selectorArg,
         )
 
         // 1) 抓信息（为了拿到标题做文件名 / 提前展示）
@@ -175,8 +189,16 @@ class DownloadService : Service() {
         DownloadCenter.update {
             it.copy(
                 status = DownloadStatus.Downloading,
-                info = info?.let { i -> VideoInfo(i.title, i.uploader, i.duration, i.resolution) },
+                info = info?.let { i -> VideoInfo(i.title, i.uploader, i.duration, i.resolution, i.thumbnail) },
             )
+        }
+        currentTitle = info?.title.orEmpty()
+        currentThumb = info?.thumbnail.orEmpty()
+        currentFormatLabel = buildString {
+            append(quality.ifBlank { "best" })
+            append(" · ")
+            append(format)
+            if (selectorArg.isNotBlank()) append(" · ").append(selectorArg)
         }
 
         val finalOptions = info?.title?.takeIf { it.isNotBlank() }?.let { title ->
@@ -217,8 +239,10 @@ class DownloadService : Service() {
         }
 
         // 3) 发布到相册（剪映、相册等 App 直接可见；不需要任何存储权限）
+        val sizeText = FormatOption.formatBytes(file.length())
         if (!config.exportToGallery) {
             DownloadCenter.update { it.copy(destination = file.parent.orEmpty()) }
+            saveRecord(file.absolutePath, sizeText, "done")
             finishOk(file.absolutePath, file.name)
             return
         }
@@ -238,12 +262,33 @@ class DownloadService : Service() {
             )
             DownloadCenter.update { it.copy(destination = "系统相册") }
             withContext(Dispatchers.IO) { runCatching { file.delete() } }
+            saveRecord(uri.toString(), sizeText, "done")
             finishOk(uri.toString(), file.name)
         } else {
             DownloadCenter.note("[警告] 存入相册失败，文件保留在：${file.absolutePath}")
             DownloadCenter.update { it.copy(destination = file.parent.orEmpty()) }
+            saveRecord(file.absolutePath, sizeText, "done")
             finishOk(file.absolutePath, file.name)
         }
+    }
+
+    /** 写一条下载记录（下载列表标签页读它） */
+    private fun saveRecord(uri: String, sizeText: String, status: String) {
+        runCatching {
+            DownloadHistory.add(
+                this,
+                DownloadRecord(
+                    id = System.currentTimeMillis().toString(),
+                    title = currentTitle.ifBlank { File(uri).name },
+                    uri = uri,
+                    thumb = currentThumb,
+                    formatLabel = currentFormatLabel,
+                    sizeText = sizeText,
+                    status = status,
+                    timeMs = System.currentTimeMillis(),
+                ),
+            )
+        }.onFailure { Log.w(TAG, "save record failed: ${it.message}") }
     }
 
     private fun finishOk(target: String, displayName: String) {
@@ -295,6 +340,8 @@ class DownloadService : Service() {
     private fun finishWithError(message: String) {
         DownloadCenter.update { it.copy(status = DownloadStatus.Error, error = message, eta = "") }
         DownloadCenter.log("[失败] $message")
+        // 失败也记一条，用户能在下载列表里看到并重试
+        saveRecord("", "", "error")
         val pi = PendingIntent.getActivity(
             this, 3,
             Intent(this, MainActivity::class.java),

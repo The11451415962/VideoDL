@@ -10,32 +10,38 @@ import com.videodl.app.data.ConfigRepositoryImpl
 import com.videodl.app.data.DownloadCenter
 import com.videodl.app.data.DownloadStatus
 import com.videodl.app.data.VideoInfo
+import com.videodl.app.engine.DownloadOptions
+import com.videodl.app.engine.FormatOption
+import com.videodl.app.engine.Platform
 import com.videodl.app.service.DownloadService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class HomeUiState(
     val url: String = "",
-    val videoInfo: VideoInfo? = null,
-    val format: String = "mp4",
-    val quality: String = "best",
-    val proxyMode: String = "auto",
+    /** 正在抓取信息/格式 */
+    val fetching: Boolean = false,
+    val fetchError: String = "",
+    val info: VideoInfo? = null,
+    val thumbnail: String = "",
+    val formats: List<FormatOption> = emptyList(),
+    /** 当前下载（来自 DownloadCenter） */
     val percent: Float = 0f,
     val speed: String = "",
     val eta: String = "",
     val status: DownloadStatus = DownloadStatus.Idle,
     val logs: List<String> = emptyList(),
-    /** 完成后打开用的目标：相册是 content:// URI，未开相册时是文件路径 */
     val finishedFile: String? = null,
     val errorMessage: String = "",
-    /** 来自设置页的「下载完成后自动打开文件」开关 */
     val autoOpenFile: Boolean = true,
-    /** 人类可读的保存位置（"系统相册" 或某个目录） */
     val destination: String = "",
 ) {
     val busy: Boolean
@@ -43,14 +49,16 @@ data class HomeUiState(
 }
 
 /**
- * 主页只负责"选择"和"转发动作"；真正的下载在 [DownloadService] 里跑，
- * 状态从进程内的 [DownloadCenter] 读回来。这样切走 App 下载也不会断。
+ * 首页（新建下载）的状态与动作。
+ *
+ * 流程对齐 YTDLnis：粘贴链接 → 抓取 → 结果卡片（缩略图/标题/时长）
+ * → 选格式（底部弹窗）或直接"下载视频 / 仅音频" → 交给前台 Service 下载。
  */
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val appCtx: Application = app
+    private val engine = (app as MainApplication).engine
     private val configRepo: ConfigRepository = ConfigRepositoryImpl(app)
 
-    /** 界面自己的选择状态（链接、格式、清晰度、代理） */
     private val selection = MutableStateFlow(HomeUiState())
 
     val state: StateFlow<HomeUiState> = combine(selection, DownloadCenter.state) { sel, dl ->
@@ -60,10 +68,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             eta = dl.eta,
             status = dl.status,
             logs = dl.logs,
-            videoInfo = dl.info,
-            finishedFile = dl.finishedUri,
+            finishedFile = dl.finishedUri ?: sel.finishedFile,
             errorMessage = dl.error,
-            destination = dl.destination,
+            destination = dl.destination.ifBlank { sel.destination },
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUiState())
 
@@ -71,45 +78,91 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             configRepo.configFlow.collect { cfg ->
                 selection.update {
-                    it.copy(
-                        proxyMode = cfg.proxyMode,
-                        format = cfg.defaultFormat,
-                        quality = cfg.defaultQuality,
-                        autoOpenFile = cfg.autoOpenFile,
-                    )
+                    it.copy(autoOpenFile = cfg.autoOpenFile)
                 }
             }
         }
     }
 
-    fun onUrlChanged(url: String) = selection.update { it.copy(url = url) }
-    fun onFormatChanged(fmt: String) = selection.update { it.copy(format = fmt) }
-    fun onQualityChanged(q: String) = selection.update { it.copy(quality = q) }
-    fun onProxyModeChanged(p: String) = selection.update { it.copy(proxyMode = p) }
+    fun onUrlChanged(url: String) {
+        selection.update { it.copy(url = url, fetchError = "") }
+    }
 
     /**
      * 系统分享直达。
      *
-     * @param startNow 由 [com.videodl.app.ShareReceiver] 分享过来时它是 true —— 下载
-     *   已经在分享入口直接启动了，这里只回填链接，避免重复下一次；
-     *   其它入口（例如直接把 SEND 发给界面）才由这里启动。
+     * @param startNow 由 ShareReceiver 分享过来时是 false —— 下载已经在分享入口启动了，
+     *   这里只回填链接并抓一次信息把结果卡片显示出来；
+     *   其它入口（直接把 SEND 发给界面）才由这里启动。
      */
     fun consumeSharedUrl(url: String, startNow: Boolean = true) {
         if (url.isBlank()) return
-        selection.update { it.copy(url = url) }
-        if (startNow && !state.value.busy) startDownload()
+        selection.update { it.copy(url = url, fetchError = "") }
+        fetch()
+        if (startNow) startDownload()
     }
 
-    fun startDownload() {
+    /** 抓取链接信息 + 可选格式（结果卡片和格式弹窗的数据源） */
+    fun fetch() {
         val s = selection.value
-        if (s.url.isBlank() || s.busy) return
-        DownloadCenter.reset()
-        DownloadService.start(appCtx, s.url.trim(), s.format, s.quality, s.proxyMode)
+        val url = s.url.trim()
+        if (url.isBlank() || s.fetching) return
+        selection.update { it.copy(fetching = true, fetchError = "", info = null, formats = emptyList()) }
+        viewModelScope.launch {
+            val cfg = configRepo.configFlow.first()
+            val opts = baseOptions(url, cfg)
+            val result = runCatching {
+                withContext(Dispatchers.IO) { engine.fetchDetail(url, opts) }
+            }
+            result.onSuccess { detail ->
+                selection.update {
+                    it.copy(
+                        fetching = false,
+                        info = VideoInfo(detail.title, detail.uploader, detail.duration, ""),
+                        thumbnail = detail.thumbnail,
+                        formats = detail.formats,
+                    )
+                }
+            }.onFailure { e ->
+                selection.update {
+                    it.copy(fetching = false, fetchError = e.message ?: "抓取失败")
+                }
+            }
+        }
     }
+
+    /** 打开格式弹窗前的准备（格式已在抓取时拿到） */
+    fun formats(): List<FormatOption> = selection.value.formats
+
+    /** 开始下载：selector 为空表示按画质档位自动挑（H.264/AAC 优先） */
+    fun startDownload(
+        selector: String = "",
+        formatOverride: String = "",
+    ) {
+        val s = selection.value
+        val url = s.url.trim()
+        if (url.isBlank() || s.busy) return
+        DownloadCenter.reset()
+        val format = formatOverride.ifBlank {
+            if (selector.isNotBlank() && selector.contains("audio")) "mp3" else "mp4"
+        }
+        DownloadService.start(
+            ctx = appCtx,
+            url = url,
+            format = format,
+            quality = selection.value.formats.firstOrNull { it.id == selector }?.let { fmt ->
+                if (fmt.height > 0) "${fmt.height}p" else "best"
+            } ?: "best",
+            proxyMode = "",
+            selector = selector,
+        )
+    }
+
+    /** 仅音频：走 mp3 档位 */
+    fun startAudioDownload() = startDownload(selector = "", formatOverride = "mp3")
 
     fun cancel() {
-        // 与 Service 同进程：先让引擎停下，Service 收到取消结果后会收尾并停掉通知
-        (appCtx as MainApplication).engine.cancel()
+        engine.cancel()
         DownloadService.cancel(appCtx)
     }
 
@@ -118,10 +171,29 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             as ClipboardManager
         val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: return
         val url = extractUrl(text)
-        if (url.isNotBlank()) selection.update { it.copy(url = url) }
+        if (url.isNotBlank()) {
+            selection.update { it.copy(url = url, fetchError = "") }
+            fetch()
+        }
     }
 
-    /** 与桌面版 _extract_url_from_text 1:1 对应 */
+    private fun baseOptions(
+        url: String,
+        cfg: com.videodl.app.data.AppConfig,
+    ): DownloadOptions = DownloadOptions(
+        url = url,
+        outputPath = "",
+        proxyMode = cfg.proxyMode,
+        proxyUrl = cfg.proxyUrl,
+        cookieMode = cfg.cookieMode,
+        cookiePath = cfg.cookiePathUri,
+        format = cfg.defaultFormat,
+        quality = cfg.defaultQuality,
+        platform = Platform.detect(url),
+        ffmpegLocation = com.videodl.app.data.FileRepository.ffmpegLocation(appCtx),
+    )
+
+    /** 与桌面版 extract_url_from_text 1:1 对应 */
     private fun extractUrl(text: String): String {
         val t = text.trim()
         if (t.startsWith("http")) return t.trimEnd('。', '．', '.', '，', ',', '/', '\\')

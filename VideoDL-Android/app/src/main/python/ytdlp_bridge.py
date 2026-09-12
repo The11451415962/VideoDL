@@ -103,7 +103,7 @@ def _merge_args(opts, args_list):
 
 
 def fetch_info(url, args_list):
-    """返回 JSON str：{title, uploader, duration, width, height} 或 {error}。"""
+    """返回 JSON str：{title, uploader, duration, width, height, thumbnail} 或 {error}。"""
     try:
         args_list = list(args_list)  # Chaquopy 传入 Java ArrayList，转成 Python list
         opts = {"noplaylist": True, "playlist_items": "1",
@@ -117,7 +117,50 @@ def fetch_info(url, args_list):
                 "duration": info.get("duration", 0),
                 "width": info.get("width", 0),
                 "height": info.get("height", 0),
+                "thumbnail": info.get("thumbnail") or "",
             })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def list_formats(url, args_list):
+    """列出这个视频可选的所有格式（给"格式选择"底部弹窗用）。
+
+    返回 JSON：{"title":..., "thumbnail":..., "duration":..., "uploader":...,
+                "formats":[{id,note,ext,vcodec,acodec,height,fps,filesize,tbr,abr,audio_only}]}
+    或 {"error": "..."}
+    """
+    try:
+        args_list = list(args_list)
+        opts = {"noplaylist": True, "playlist_items": "1",
+                "quiet": True, "no_warnings": True}
+        _merge_args(opts, args_list)
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        formats = []
+        for f in (info.get("formats") or []):
+            vcodec = (f.get("vcodec") or "none")
+            acodec = (f.get("acodec") or "none")
+            formats.append({
+                "id": f.get("format_id") or "",
+                "note": f.get("format_note") or "",
+                "ext": f.get("ext") or "",
+                "vcodec": vcodec,
+                "acodec": acodec,
+                "height": f.get("height") or 0,
+                "fps": f.get("fps") or 0,
+                "filesize": f.get("filesize") or f.get("filesize_approx") or 0,
+                "tbr": f.get("tbr") or 0,
+                "abr": f.get("abr") or 0,
+                "audio_only": vcodec == "none" and acodec != "none",
+            })
+        return json.dumps({
+            "title": info.get("title", "未知标题"),
+            "uploader": info.get("uploader") or info.get("channel", ""),
+            "duration": info.get("duration") or 0,
+            "thumbnail": info.get("thumbnail") or "",
+            "formats": formats,
+        })
     except Exception as e:
         return json.dumps({"error": str(e)})
 

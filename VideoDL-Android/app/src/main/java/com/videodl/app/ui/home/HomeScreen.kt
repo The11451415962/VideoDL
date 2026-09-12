@@ -1,7 +1,5 @@
 package com.videodl.app.ui.home
 
-import android.content.Intent
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,20 +10,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -45,339 +41,298 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.videodl.app.R
+import android.widget.Toast
+import coil.compose.AsyncImage
 import com.videodl.app.data.DownloadStatus
-import com.videodl.app.data.FileRepository
+import com.videodl.app.ui.formatDuration
+import com.videodl.app.ui.openFile
 
+/**
+ * 首页：粘贴链接 → 抓取 → 结果卡片（缩略图/标题/时长 + 下载视频 / 仅音频）→ 选格式。
+ * 版式对齐 YTDLnis 的 result_card。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     vm: HomeViewModel,
-    onOpenSettings: () -> Unit,
+    onOpenFile: (String) -> Unit,
 ) {
     val state by vm.state.collectAsState()
     val ctx = LocalContext.current
     var logsExpanded by remember { mutableStateOf(false) }
+    var sheetVisible by remember { mutableStateOf(false) }
 
-    // 下载失败时弹窗提示具体原因
-    LaunchedEffect(state.status) {
+    // 失败提示
+    LaunchedEffect(state.status, state.errorMessage) {
         if (state.status == DownloadStatus.Error && state.errorMessage.isNotBlank()) {
             Toast.makeText(ctx, "下载失败：${state.errorMessage}", Toast.LENGTH_LONG).show()
         }
     }
-
-    // 下载完成后按设置自动打开文件（这个开关以前存了配置但没人读，等于摆设）
-    val finishedFile = state.finishedFile
-    LaunchedEffect(finishedFile) {
-        if (finishedFile != null && state.autoOpenFile) openFile(ctx, finishedFile)
+    // 完成后按设置自动打开
+    val finished = state.finishedFile
+    LaunchedEffect(finished) {
+        if (finished != null && state.autoOpenFile) onOpenFile(finished)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
-                actions = {
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.btn_settings))
-                    }
-                }
-            )
-        }
-    ) { padding ->
+    // 注意：这里不用自己的 Scaffold —— 外层 VideoDlApp 已有 Scaffold（含底部导航），
+    // 再套一层会重复叠加系统栏内边距，顶部会多出一大块空白。
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(title = { Text("视频下载器") })
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(rememberScrollState()),
         ) {
-            // ---- 链接输入 + 粘贴 ----
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                OutlinedTextField(
-                    value = state.url,
-                    onValueChange = vm::onUrlChanged,
-                    placeholder = { Text(stringResource(R.string.hint_url)) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                IconButton(onClick = vm::pasteFromClipboard) {
-                    Icon(Icons.Filled.Create, contentDescription = stringResource(R.string.btn_paste))
-                }
-            }
+            Spacer(Modifier.height(4.dp))
 
-            Spacer(Modifier.height(12.dp))
-
-            // ---- 视频信息卡片 ----
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                val info = state.videoInfo
-                if (info != null) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            text = info.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "${info.uploader}  ·  ${formatDuration(info.duration)}  ·  ${info.resolution}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+            // ---- 链接输入 ----
+            OutlinedTextField(
+                value = state.url,
+                onValueChange = vm::onUrlChanged,
+                placeholder = { Text("粘贴视频链接，例如 https://www.bilibili.com/video/BV...") },
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = vm::pasteFromClipboard) {
+                        Icon(Icons.Filled.Create, contentDescription = "粘贴")
                     }
-                } else {
-                    Text(
-                        text = stringResource(R.string.video_info_placeholder),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-            Spacer(Modifier.height(12.dp))
-
-            // ---- 格式 / 画质 / 代理 选择 ----
+            Spacer(Modifier.height(8.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                LabeledDropdown(
-                    label = stringResource(R.string.label_format),
-                    options = listOf("mp4" to stringResource(R.string.format_mp4),
-                                      "webm" to stringResource(R.string.format_webm),
-                                      "mp3" to stringResource(R.string.format_mp3)),
-                    selected = state.format,
-                    onSelect = vm::onFormatChanged,
+                Button(
+                    onClick = vm::fetch,
+                    enabled = state.url.isNotBlank() && !state.fetching,
                     modifier = Modifier.weight(1f),
-                )
-                LabeledDropdown(
-                    label = stringResource(R.string.label_quality),
-                    options = listOf("best" to stringResource(R.string.quality_best),
-                                      "1080p" to stringResource(R.string.quality_1080p),
-                                      "720p" to stringResource(R.string.quality_720p),
-                                      "audio" to stringResource(R.string.quality_audio)),
-                    selected = state.quality,
-                    onSelect = vm::onQualityChanged,
-                    modifier = Modifier.weight(1f),
-                )
-                LabeledDropdown(
-                    label = stringResource(R.string.label_proxy),
-                    options = listOf("auto" to stringResource(R.string.proxy_auto),
-                                      "direct" to stringResource(R.string.proxy_direct),
-                                      "proxy" to stringResource(R.string.proxy_force)),
-                    selected = state.proxyMode,
-                    onSelect = vm::onProxyModeChanged,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // ---- 进度条 ----
-            LinearProgressIndicator(
-                progress = { (state.percent / 100f).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(8.dp),
-            )
-            Spacer(Modifier.height(4.dp))
-            Row(
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                val statusLabel = when (state.status) {
-                    DownloadStatus.Idle -> stringResource(R.string.status_idle)
-                    DownloadStatus.Fetching -> stringResource(R.string.status_fetching)
-                    DownloadStatus.Downloading -> stringResource(R.string.status_downloading)
-                    DownloadStatus.Done -> stringResource(R.string.status_done)
-                    DownloadStatus.Error -> stringResource(R.string.status_error)
+                ) {
+                    if (state.fetching) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(18.dp).width(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("正在抓取…")
+                    } else {
+                        Text("抓取信息")
+                    }
                 }
-                Text(
-                    text = statusLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                val speedEta = listOf(state.speed, state.eta).filter { it.isNotBlank() }.joinToString("  ·  ")
-                Text(
-                    text = if (speedEta.isNotBlank()) "${state.percent.toInt()}%  ·  $speedEta"
-                           else "${state.percent.toInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                OutlinedButton(
+                    onClick = { sheetVisible = true },
+                    enabled = state.formats.isNotEmpty(),
+                ) {
+                    Text("选格式")
+                }
             }
 
-            if (state.status == DownloadStatus.Error && state.errorMessage.isNotBlank()) {
+            if (state.fetchError.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "❌ ${state.errorMessage}",
+                    "❌ ${state.fetchError}",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            // 如实告诉用户文件去哪了：默认是系统相册，关掉相册开关时是某个目录
-            if (state.destination.isNotBlank()) {
+            // ---- 结果卡片 ----
+            val info = state.info
+            if (info != null) {
+                Spacer(Modifier.height(12.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column {
+                        AsyncImage(
+                            model = state.thumbnail,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                        )
+                        Column(Modifier.padding(14.dp)) {
+                            Text(
+                                text = info.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = listOfNotNull(
+                                    info.uploader.takeIf { it.isNotBlank() },
+                                    formatDuration(info.duration).takeIf { it != "?" },
+                                    "${state.formats.size} 个可用格式",
+                                ).joinToString("  ·  "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { vm.startDownload() },
+                                    enabled = !state.busy,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("下载视频")
+                                }
+                                OutlinedButton(
+                                    onClick = { vm.startAudioDownload() },
+                                    enabled = !state.busy,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text("仅音频")
+                                }
+                            }
+                            TextButton(
+                                onClick = { sheetVisible = true },
+                                enabled = state.formats.isNotEmpty() && !state.busy,
+                            ) {
+                                Text("按格式挑选（${state.formats.size}）")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- 当前下载 ----
+            if (state.busy || state.status == DownloadStatus.Done || state.status == DownloadStatus.Error) {
+                Spacer(Modifier.height(12.dp))
+                DownloadStatusCard(
+                    status = state.status,
+                    percent = state.percent,
+                    speed = state.speed,
+                    eta = state.eta,
+                    destination = state.destination,
+                    onCancel = vm::cancel,
+                    onOpen = { state.finishedFile?.let(onOpenFile) },
+                    finished = state.finishedFile != null,
+                )
+            }
+
+            // ---- 日志（可折叠） ----
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = { logsExpanded = !logsExpanded }) {
+                Text(if (logsExpanded) "▼ 收起日志" else "▶ 下载日志（${state.logs.size}）")
+            }
+            if (logsExpanded) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = if (state.logs.isEmpty()) "（暂无日志）"
+                        else state.logs.takeLast(200).joinToString("\n"),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+
+    if (sheetVisible) {
+        FormatSheet(
+            formats = state.formats,
+            onDismiss = { sheetVisible = false },
+            onPick = { fmt ->
+                sheetVisible = false
+                vm.startDownload(selector = fmt.id)
+            },
+        )
+    }
+}
+
+/** 当前下载状态卡片：进度条 + 速度/剩余 + 停止/播放 */
+@Composable
+private fun DownloadStatusCard(
+    status: DownloadStatus,
+    percent: Float,
+    speed: String,
+    eta: String,
+    destination: String,
+    onCancel: () -> Unit,
+    onOpen: () -> Unit,
+    finished: Boolean,
+) {
+    val statusText = when (status) {
+        DownloadStatus.Idle -> "空闲"
+        DownloadStatus.Fetching -> "正在获取信息…"
+        DownloadStatus.Downloading -> "下载中"
+        DownloadStatus.Done -> "下载完成"
+        DownloadStatus.Error -> "下载失败"
+    }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(statusText, style = MaterialTheme.typography.titleSmall)
+                Text("${percent.toInt()}%", style = MaterialTheme.typography.titleSmall)
+            }
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { (percent / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+            )
+            val sub = listOf(speed.takeIf { it.isNotBlank() }?.let { "↓$it" }, eta.takeIf { it.isNotBlank() }?.let { "剩余 $it" })
+                .filterNotNull().joinToString("  ·  ")
+            if (sub.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "保存位置：${state.destination}",
+                    sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (destination.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "保存位置：$destination",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            Spacer(Modifier.height(12.dp))
-
-            // ---- 按钮组 ----
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Button(
-                    onClick = vm::startDownload,
-                    enabled = !state.busy,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.btn_download))
-                }
-                OutlinedButton(
-                    onClick = vm::cancel,
-                    enabled = state.busy,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.btn_stop))
-                }
-            }
-
-            val finishedPath = state.finishedFile
-            if (finishedPath != null) {
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { openFile(ctx, finishedPath) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.btn_open_file))
-                }
-                if (state.destination.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.hint_in_gallery),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // ---- 可折叠日志 ----
-            TextButton(onClick = { logsExpanded = !logsExpanded }) {
-                Text(
-                    if (logsExpanded) stringResource(R.string.logs_hide)
-                    else stringResource(R.string.logs_show)
-                )
-            }
-            if (logsExpanded) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = if (state.logs.isEmpty()) "（无日志）"
-                               else state.logs.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(8.dp),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LabeledDropdown(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val displayLabel = options.firstOrNull { it.first == selected }?.second ?: selected
-
-    Column(modifier = modifier) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-            OutlinedTextField(
-                value = displayLabel,
-                onValueChange = {},
-                readOnly = true,
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.menuAnchor().fillMaxWidth(),
-            )
-            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                options.forEach { (value, text) ->
-                    DropdownMenuItem(
-                        text = { Text(text) },
-                        onClick = { onSelect(value); expanded = false },
-                    )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (status == DownloadStatus.Downloading || status == DownloadStatus.Fetching) {
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.Close, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("停止")
+                    }
+                } else if (finished) {
+                    Button(onClick = onOpen, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("播放")
+                    }
+                    OutlinedButton(onClick = onCancel, enabled = false, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("再下一次")
+                    }
                 }
             }
         }
-    }
-}
-
-private fun formatDuration(seconds: Int): String {
-    if (seconds <= 0) return "?"
-    val m = seconds / 60
-    val s = seconds % 60
-    return "$m:${s.toString().padStart(2, '0')}"
-}
-
-/** 打开结果：相册里的是 content:// URI，未开相册时是本地文件路径，两种都要支持 */
-private fun openFile(ctx: android.content.Context, target: String) {
-    try {
-        val mime = when {
-            target.endsWith(".mp3", true) -> "audio/mpeg"
-            target.endsWith(".webm", true) -> "video/webm"
-            else -> "video/*"
-        }
-        val uri = if (target.startsWith("content://")) {
-            android.net.Uri.parse(target)
-        } else {
-            androidx.core.content.FileProvider.getUriForFile(
-                ctx, "${ctx.packageName}.fileprovider", java.io.File(target)
-            )
-        }
-        ctx.startActivity(Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mime)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        })
-    } catch (e: Exception) {
-        Toast.makeText(ctx, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
     }
 }

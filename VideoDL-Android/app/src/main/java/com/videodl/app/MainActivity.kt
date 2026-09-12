@@ -9,19 +9,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.videodl.app.ui.VideoDlApp
 import com.videodl.app.ui.home.EXTRA_SHARE_STARTED
 import com.videodl.app.ui.home.EXTRA_SHARE_URL
-import com.videodl.app.ui.home.HomeScreen
 import com.videodl.app.ui.home.HomeViewModel
-import com.videodl.app.ui.settings.SettingsScreen
-import com.videodl.app.ui.settings.SettingsViewModel
+import com.videodl.app.ui.openFile
 import com.videodl.app.ui.theme.VideoDLTheme
 
 class MainActivity : ComponentActivity() {
@@ -50,20 +43,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             VideoDLTheme {
-                var showSettings by remember { mutableStateOf(false) }
-                val settingsVm: SettingsViewModel = viewModel()
-
-                if (showSettings) {
-                    SettingsScreen(
-                        vm = settingsVm,
-                        onBack = { showSettings = false },
-                    )
-                } else {
-                    HomeScreen(
-                        vm = homeVm,
-                        onOpenSettings = { showSettings = true },
-                    )
-                }
+                VideoDlApp(
+                    homeVm = homeVm,
+                    onOpenFile = { target -> openFile(this, target) },
+                )
             }
         }
     }
