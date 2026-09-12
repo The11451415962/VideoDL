@@ -1,61 +1,104 @@
 # SDD Progress — VideoDL Android (feat/android-v1)
 
-Plan: `docs/superpowers/plans/2026-07-20-videodl-android.md`
+Plan: `docs/superpowers/plans/2026-07-20-videodl-android.md`（勾选框已与本文同步）
 Android project root: `C:\Users\36306\Desktop\shipinxiazaiqi\VideoDL-Android`
-Git work branch: `feat/android-v1` (base main)
+Git work branch: `feat/android-v1`（base main）
 
-## Status
+> 台账最后更新时间：2026-09-13。Task 1–15 全部完成，唯一留白是 Task 15 Step 1
+> （生成 release 密钥库）—— 那一步需要用户自己执行并保管密码。
 
-- [ ] Task 1: 工程脚手架 — 新项目 + Gradle + 依赖
-- [ ] Task 2: AppConfig + ConfigRepository (DataStore)
-- [ ] Task 3: 格式/代理/平台逻辑翻译
-- [ ] Task 4: 文件命名去重
-- [ ] Task 5: Python yt-dlp 桥脚本
-- [ ] Task 6: 引擎接口 + DownloadOptions
-- [ ] Task 7: YtdlpEngineImpl (Chaquopy)
-- [ ] Task 8: 前台 DownloadService + 通知 + FileRepository
-- [ ] Task 9: 系统分享直达 ShareReceiver
-- [ ] Task 10: Material 3 主题
-- [ ] Task 11: HomeViewModel 状态机
-- [ ] Task 12: HomeScreen Compose UI
-- [ ] Task 13: SettingsViewModel + SettingsScreen
-- [ ] Task 14: MainActivity 导航宿主 + 真机验证
-- [ ] Task 15: release 签名 + APK 输出
+## Task 状态
 
-## Completed
-- Task 1: complete (commits 8088289..81d1fb2, review ✅ Approved)
+| Task | 内容 | 状态 | 备注 |
+|---|---|---|---|
+| 1 | 工程脚手架 | ✅ | |
+| 2 | AppConfig + ConfigRepository (DataStore) | ✅ | 见下方遗留小项 |
+| 3 | 格式/代理/平台逻辑翻译 | ✅ | |
+| 4 | 文件命名去重 | ✅ | |
+| 5 | Python yt-dlp 桥脚本 | ✅ | Python 侧无 JVM 测试 |
+| 6 | 引擎接口 + DownloadOptions | ✅ | |
+| 7 | YtdlpEngineImpl (Chaquopy) | ✅ | |
+| 8 | 前台 DownloadService + 通知 + FileRepository | ✅ | |
+| 9 | 系统分享直达 ShareReceiver | ✅ | |
+| 10 | Material 3 主题 | ✅ | |
+| 11 | HomeViewModel 状态机 | ✅ | |
+| 12 | HomeScreen Compose UI | ✅ | |
+| 13 | SettingsViewModel + SettingsScreen | ✅ | |
+| 14 | MainActivity 导航宿主 + 真机验证 | ✅ | 真机跑通，见下 |
+| 15 | release 签名 + APK 输出 | ⚠️ 部分 | 签名配置已接通并实测签名成功；**用户自己的密钥库还没生成** |
 
-## Minor findings (carry to final review)
-- T2: AppConfig mapping duplicated in configFlow + update lambda (brief-sourced) — extract private fun
-- T2: ConfigRepositoryTest no @Before DataStore.clear() — flake risk (brief-sourced)
-- T1: empty `main` product flavor (app/build.gradle.kts) is dead config — let next task drop or explain it
-- T1: `ndk { abiFilters += listOf("arm64-v8a") }` sits in defaultConfig, constrains debug too — intentional now but flag for emulator builds later
-- T1: MainActivity stub extends `android.app.Activity` not `ComponentActivity` — next Compose task should convert it
-- T1: report text says gradle-8.7-all.zip, committed is -bin.zip (cosmetic)
+## 测试（权威统计，来自 build/test-results）
 
-## Concerns carried forward
-- Chaquopy host-Python version drifts per machine and can hit cgi crash on ≥3.13; embedded Python stable 3.10
-- yt-dlp pip install is network-dependent at build time
-- **无真机/无AVD，instrumented test 只能 compile 验证、不能运行。system-images 未安装（起模拟器需下载大镜像）。最终真机验证由用户在 Task 14 通过其手机完成。所有 androidTest 的 review verdict 应为 ⚠️ unverified-runtime（环境限制）**
+JVM 单测 **49 个用例 / 0 失败 / 0 跳过**，分布在 8 个文件、10 个测试类
+（类名与文件名不一致，一个文件里可能有多个类）：
 
-## Completed
-- Task 1: complete (commits 8088289..81d1fb2, review ✅ Approved)
-- Task 2: complete (commits 81d1fb2..47ebafb, compile-only verification — no device; 2 Minor brief-sourced: AppConfig mapping duplication, test isolation)
-- Task 3: complete (commits 47ebafb..447fa4c, 10/10 passing, zero issues)
-- Task 4: complete (commits 447fa4c..a186872, 3/3 passing, zero issues)
-- Task 5: complete (commits a186872..1f65c76, build OK; Python 脚本无 JVM test)
-- Task 6: complete (commits 1f65c76..d1cdd08, compile OK, zero issues)
-- Task 7: complete (commits d1cdd08..281088b, compile OK, Chaquopy 集成干净, 零 issues)
-- Task 8: complete (commits 281088b..921c32b, 测试+编译双过, FileRepository 合并干净; ShareReceiver 注册但类待 T9)
-- Task 9: complete (commits 921c32b..9e1d00d, 编译通过; 3 Minor cosmetic: http case, null/empty, report wording)
-- Task 10: complete (commits 9e1d00d..d692356, compile OK, zero code issues)
+| 测试类 | 用例数 | 所在文件 |
+|---|---|---|
+| `DownloadHistoryCodecTest` | 6 | DownloadHistoryCodecTest.kt |
+| `NamingTest` | 3 | FileRepositoryTest.kt |
+| `FileRepositoryPureTest` | 4 | FileRepositoryTest.kt |
+| `FormatOptionTest` | 10 | FormatOptionTest.kt |
+| `PlatformTest` | 4 | FormatResolverTest.kt |
+| `ProxyResolverTest` | 3 | FormatResolverTest.kt |
+| `FormatTest` | 4 | ProxyResolverTest.kt |
+| `ProgressTextTest` | 4 | ProgressTextTest.kt |
+| `HomeUiStateTest` | 4 | HomeViewModelTest.kt |
+| `SplitFormatsTest` | 7 | SplitFormatsTest.kt |
 
-## Review tooling note
-- Review packages occasionally duplicate the full diff (cosmetic controller artifact) — not a code defect, ignore going forward
+```bash
+cd VideoDL-Android
+./gradlew.bat :app:testDebugUnitTest --console=plain
+```
 
-## Minor findings (carry to final review)
-- T6: Duration as Int loses sub-second — downstream formatting note
-- T6: platform default "未知" Chinese vs other English defaults — cosmetic
-- T6: cancel() unstructured, no coroutine scope tie-in — downstream impl note
+`androidTest`（`ShareReceiverTest`、`ConfigRepositoryTest`）**从未在真机上跑过** ——
+review verdict 应为 ⚠️ unverified-runtime（环境限制），不要当它通过。
 
-## Minor findings (carry to final review)
+## 真机验证状态（PJC110 / OPPO / Android 15 / arm64-v8a）
+
+**已验证**
+- 真机安装运行、真实下载、用 ffprobe 验证产物确实是 h264 + aac
+- 队列行为有 logcat 实证（`queued` / `dispatch next from queue` / `queue empty`）
+- 分享入口触发下载（不依赖界面点击）
+
+**未验证**
+- 视觉微调（`3b8f3b0`）之后**没有拿到 App 界面的截图**：下完视频会自动打开播放器抢屏，
+  随后手机锁屏，截不到界面。所以那一轮的观感改动只经过了代码层面检查。
+- 通知栏的「取消」按钮没有用手点过（adb 点不到，Service 非 exported）
+- release 包**没有装到真机上跑过**（只验证到"能构建、能签名、ABI 与体积正常"）
+
+## release 签名现状
+
+`app/build.gradle.kts` 已接通签名配置：从 `local.properties` 或 `-P` 参数读密钥，
+**没有密钥时不报错**，产出 `app-release-unsigned.apk` 并在日志里用英文提示一行。
+
+实测（用一个临时密钥库，验证完即删除，没有留在磁盘上）：
+- `assembleRelease` 构建成功 → `app-release.apk` 22 MB
+- `apksigner verify` → Verifies，APK Signature Scheme v2，RSA 2048，1 个签名者
+- 包内 `.so` 全部是 `arm64-v8a`（无 x86_64 混入）
+- 包内 `assets/chaquopy/requirements-common.imy` 解出 1072 个条目，含 `yt_dlp`（2026.8.19）→ Python 侧完整
+
+**故意没开混淆**（`isMinifyEnabled = false`）：`proguard-rules.pro` 还是空的，而 Chaquopy 靠反射调
+Python 桥。开着混淆又没写 keep 规则的结果是"装得上但一跑就崩"，而当前没有真机可验 release。
+等 release 在真机跑通之后再开混淆并补规则。
+
+## 遗留小项（carry to final review）
+
+- T1: `app/build.gradle.kts` 里空的 `productFlavors { create("main") }` 是死配置 —— 要么删，要么写清用途
+- T1: `ndk { abiFilters += listOf("arm64-v8a") }` 放在 `defaultConfig`，debug 也受约束 —— 现在是有意的，将来要跑模拟器得放开
+- T2: `AppConfig` 的字段映射在 `configFlow` 和 update lambda 里重复了一遍 —— 抽个私有函数
+- T2: `ConfigRepositoryTest` 没有 `@Before DataStore.clear()` —— 有 flake 风险
+- T6: `Duration` 用 `Int` 存，丢失亚秒精度 —— 下游格式化时注意
+- T6: `cancel()` 没有和协程 scope 绑定，结构上偏松散
+- T9: 几个 cosmetic 小项（http 大小写、null/empty 判断）
+
+## 环境限制（一直存在，别再当新问题查）
+
+- 无真机/无 AVD 时，instrumented test 只能编译、不能运行；system-images 未安装
+- Chaquopy 的宿主 Python 版本随机器漂移，≥3.13 会撞 `cgi` 崩溃；实际嵌入的是 3.10
+- 构建期 `pip install yt-dlp` 依赖网络
+- Gradle 需要写 `~/.gradle`（工作区外）—— 沙箱限制下需要放开文件权限，否则报
+  `FileNotFoundException: ...gradle-8.7-bin.zip.lck (拒绝访问)`
+
+## Review 工具备注
+
+Review 包偶尔会把整份 diff 重复一遍（controller 的 cosmetic 产物），不是代码缺陷，忽略即可。

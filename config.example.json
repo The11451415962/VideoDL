@@ -7,5 +7,6 @@
   "cookie_browser": "chrome",
   "default_format": "mp4",
   "default_quality": "best",
-  "auto_open_folder": true
+  "auto_open_folder": true,
+  "ffmpeg_path": ""
 }

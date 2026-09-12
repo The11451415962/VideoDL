@@ -72,7 +72,7 @@ build.gradle.kts + settings.gradle.kts + gradle.properties
 **Interfaces:**
 - 无外部依赖；为后续所有任务提供可编译的工程壳。
 
-- [ ] **Step 1: 创建工程根与 Gradle 封装**
+- [x] **Step 1: 创建工程根与 Gradle 封装**
 
 在工程根创建 `settings.gradle.kts`:
 ```kotlin
@@ -108,7 +108,7 @@ kotlin.code.style=official
 android.nonTransitiveRClass=true
 ```
 
-- [ ] **Step 2: 写 app/build.gradle.kts（Chaquopy + Compose + DataStore）**
+- [x] **Step 2: 写 app/build.gradle.kts（Chaquopy + Compose + DataStore）**
 
 ```kotlin
 plugins {
@@ -173,7 +173,7 @@ dependencies {
 }
 ```
 
-- [ ] **Step 3: 写基础 AndroidManifest.xml**
+- [x] **Step 3: 写基础 AndroidManifest.xml**
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -204,7 +204,7 @@ dependencies {
 </manifest>
 ```
 
-- [ ] **Step 4: 写 strings.xml 和 themes.xml**
+- [x] **Step 4: 写 strings.xml 和 themes.xml**
 
 `res/values/strings.xml`:
 ```xml
@@ -219,12 +219,12 @@ dependencies {
 </resources>
 ```
 
-- [ ] **Step 5: 验证工程壳可构建**
+- [x] **Step 5: 验证工程壳可构建**
 
 Run: `./gradlew :app:assembleDebug`
 预期: 需至少一个 `MainActivity.kt` 存根才能通过（下一步任务完成后再完整跑）。或先创建 `MainActivity.kt` 空壳 class 占位通过本步编译。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add -A
@@ -243,7 +243,7 @@ git commit -m "chore: scaffold Android project (Gradle + Chaquopy + Compose + Da
 **Interfaces:**
 - 产出 `AppConfig` 数据类 + `ConfigRepository`（`data class AppConfig` 被 Task 14 SettingsScreen、Task 9 YtdlpEngineImpl 消费）。
 
-- [ ] **Step 1: 写 AppConfig 数据类**
+- [x] **Step 1: 写 AppConfig 数据类**
 
 ```kotlin
 package com.videodl.app.data
@@ -260,7 +260,7 @@ data class AppConfig(
 )
 ```
 
-- [ ] **Step 2: 写 ConfigRepository 接口草图（TDD 先写测试）**
+- [x] **Step 2: 写 ConfigRepository 接口草图（TDD 先写测试）**
 
 ```kotlin
 package com.videodl.app.data
@@ -274,7 +274,7 @@ interface ConfigRepository {
 }
 ```
 
-- [ ] **Step 3: 写 ConfigRepository 实现（DataStore）**
+- [x] **Step 3: 写 ConfigRepository 实现（DataStore）**
 
 ```kotlin
 package com.videodl.app.data
@@ -341,7 +341,7 @@ class ConfigRepositoryImpl(private val context: Context) : ConfigRepository {
 }
 ```
 
-- [ ] **Step 4: 写 DataStore 测试**
+- [x] **Step 4: 写 DataStore 测试**
 
 ```kotlin
 package com.videodl.app.data
@@ -381,12 +381,12 @@ class ConfigRepositoryTest {
 }
 ```
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 Run: `./gradlew :app:connectedDebugAndroidTest`（需连接真机/模拟器）或 `./gradlew :app:testDebugUnitTest`（把 DataStore 用 robolectric 做单元测亦可）。
 预期: PASS
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/data app/src/androidTest
@@ -405,7 +405,7 @@ git commit -m "feat: AppConfig + ConfigRepository (DataStore)"
 **Interfaces:**
 - 产出 `object Platform`、`object ProxyResolver`、`object Format`；被 Task 9 DownloadOptions、Task 11 HomeViewModel 消费。
 
-- [ ] **Step 1: 写 Platform + ProxyResolver + Format（翻译自桌面版 `detect_platform` / `resolve_proxy` / `resolve_format_string`）**
+- [x] **Step 1: 写 Platform + ProxyResolver + Format（翻译自桌面版 `detect_platform` / `resolve_proxy` / `resolve_format_string`）**
 
 ```kotlin
 package com.videodl.app.engine
@@ -464,7 +464,7 @@ object Format {
 }
 ```
 
-- [ ] **Step 2: 写 PlatformTest + ProxyResolverTest + FormatTest**
+- [x] **Step 2: 写 PlatformTest + ProxyResolverTest + FormatTest**
 
 ```kotlin
 package com.videodl.app.engine
@@ -523,12 +523,12 @@ class FormatTest {
 }
 ```
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "com.videodl.app.engine.*"`
 预期: PASS
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/engine app/src/test
@@ -546,7 +546,7 @@ git commit -m "feat: port format/platform/proxy logic from desktop to Kotlin"
 **Interfaces:**
 - 产出 `object Naming`（`nextFilePath` 逻辑）；FileRepository.kt 里整体包装 SAF。被 Task 11 HomeViewModel 消费。
 
-- [ ] **Step 1: 写 Naming 工具（翻译桌面版 `get_next_filepath`）**
+- [x] **Step 1: 写 Naming 工具（翻译桌面版 `get_next_filepath`）**
 
 ```kotlin
 package com.videodl.app.data
@@ -572,7 +572,7 @@ object Naming {
 }
 ```
 
-- [ ] **Step 2: 写测试**
+- [x] **Step 2: 写测试**
 
 ```kotlin
 package com.videodl.app.data
@@ -595,12 +595,12 @@ class NamingTest {
 }
 ```
 
-- [ ] **Step 3: 跑测试**
+- [x] **Step 3: 跑测试**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "com.videodl.app.data.NamingTest"`
 预期: PASS
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/data app/src/test
@@ -618,7 +618,7 @@ git commit -m "feat: file naming + sanitize"
 **Interfaces:**
 - 产出 Python 模块 `ytdlp_bridge`：`set_hooks(progress_hook, log_hook)` / `fetch_info(url, args_list) -> JSON str` / `download(url, output_path, args_list, ffmpeg_location) -> JSON str`。被 Task 7 YtdlpEngineImpl 通过 Chaquopy 直接调用其函数。
 
-- [ ] **Step 1: 写 Python 桥脚本（assets/ytdlp_bridge.py）**
+- [x] **Step 1: 写 Python 桥脚本（assets/ytdlp_bridge.py）**
 
 ```python
 """bridge for VideoDL Android. Chaquopy loads this from assets."""
@@ -694,11 +694,11 @@ def download(url, output_path, args_list, ffmpeg_location=""):
 
 > 说明：Kotlin 在 `set_hooks` 里注入 Python lambda（Chaquopy 支持把 Java/Kotlin 函数对象传给 Python），`on_progress` / `_log` 回调回 Kotlin 侧发进 Flow。这是引擎与 UI 之间的唯一桥梁。
 
-- [ ] **Step 2: 加 `src/main/python/__init__.py` 让 Chaquopy 识别 python 源码目录**
+- [x] **Step 2: 加 `src/main/python/__init__.py` 让 Chaquopy 识别 python 源码目录**
 
 空文件即可（pip 包走 assets）。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add app/src/main/assets/ytdlp_bridge.py app/src/main/python/__init__.py
@@ -716,7 +716,7 @@ git commit -m "feat: Python yt-dlp bridge with progress_hook + log hook"
 **Interfaces:**
 - 产出 `data class DownloadOptions`、`sealed class DownloadEvent`、`interface YtdlpEngine`。被 Task 7 实现，被 Task 8 DownloadService、Task 11 HomeViewModel 消费。
 
-- [ ] **Step 1: 写 DownloadOptions + DownloadEvent + YtdlpEngine**
+- [x] **Step 1: 写 DownloadOptions + DownloadEvent + YtdlpEngine**
 
 `engine/DownloadOptions.kt`:
 ```kotlin
@@ -761,12 +761,12 @@ interface YtdlpEngine {
 }
 ```
 
-- [ ] **Step 2: 编译通过**
+- [x] **Step 2: 编译通过**
 
 Run: `./gradlew :app:compileDebugKotlin`
 预期: BUILD SUCCESSFUL
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/engine
@@ -784,7 +784,7 @@ git commit -m "feat: YtdlpEngine interface + DownloadOptions + DownloadEvent"
 **Interfaces:**
 - 产出 `YtdlpEngineImpl` 实现 + `MainApplication.engine` 全局单例。被 Task 8 / 11 消费。
 
-- [ ] **Step 1: 写 YtdlpEngineImpl**
+- [x] **Step 1: 写 YtdlpEngineImpl**
 
 ```kotlin
 package com.videodl.app.engine
@@ -887,7 +887,7 @@ class YtdlpEngineImpl : YtdlpEngine {
 
 > 说明：Python 桥的 `ytdlp_bridge.py` 里用 `on_progress` 回调把 `d` dict 在 Python 侧拼成 JSON 字符串调 `progress_hook`；`logger` 走 `log_hook` 字符串回调——避免 Chaquopy 在 Kotlin 侧反序列化 Python dict 的繁琐。这是本任务最绕的一行，开发时按 Chaquopy 官方"passing callables"文档微调。
 
-- [ ] **Step 2: 改 ytdlp_bridge.py 的回调为字符串 JSON（匹配上面）**
+- [x] **Step 2: 改 ytdlp_bridge.py 的回调为字符串 JSON（匹配上面）**
 
 把 `on_progress`/`_Logger` 改成回调字符串：
 ```python
@@ -914,7 +914,7 @@ class _Logger:
             _log_hook(msg.replace("\n", " "))
 ```
 
-- [ ] **Step 3: 写 MainApplication 单例**
+- [x] **Step 3: 写 MainApplication 单例**
 
 ```kotlin
 package com.videodl.app
@@ -937,12 +937,12 @@ class MainApplication : Application() {
 }
 ```
 
-- [ ] **Step 4: 编译通过**
+- [x] **Step 4: 编译通过**
 
 Run: `./gradlew :app:compileDebugKotlin`
 预期: BUILD SUCCESSFUL
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add app
@@ -962,7 +962,7 @@ git commit -m "feat: YtdlpEngineImpl via Chaquopy + MainApplication init"
 **Interfaces:**
 - 产出 `DownloadService`（`companion object` 含 `start`/`cancel`/`observe`）；被 Task 11 HomeViewModel 消费。
 
-- [ ] **Step 1: 写 DownloadService**
+- [x] **Step 1: 写 DownloadService**
 
 ```kotlin
 package com.videodl.app.service
@@ -1086,7 +1086,7 @@ class DownloadService : Service() {
 }
 ```
 
-- [ ] **Step 2: FileRepository 补全（buildOutputPath + ffmpegLocation，用 JVM 文件路径做 v1）**
+- [x] **Step 2: FileRepository 补全（buildOutputPath + ffmpegLocation，用 JVM 文件路径做 v1）**
 
 ```kotlin
 package com.videodl.app.data
@@ -1114,7 +1114,7 @@ object FileRepository {
 }
 ```
 
-- [ ] **Step 3: 写 FileRepositoryTest（JVM 单元测，robolectric-free，用临时目录）**
+- [x] **Step 3: 写 FileRepositoryTest（JVM 单元测，robolectric-free，用临时目录）**
 
 ```kotlin
 package com.videodl.app.data
@@ -1170,7 +1170,7 @@ class FileRepositoryPureTest {
 }
 ```
 
-- [ ] **Step 4: AndroidManifest.xml 注册 Service + ShareReceiver**
+- [x] **Step 4: AndroidManifest.xml 注册 Service + ShareReceiver**
 
 在 `<application>` 内补：
 ```xml
@@ -1187,12 +1187,12 @@ class FileRepositoryPureTest {
     android:foregroundServiceType="dataSync"/>
 ```
 
-- [ ] **Step 5: 跑测试 + 编译**
+- [x] **Step 5: 跑测试 + 编译**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "com.videodl.app.data.*"` 和 `./gradlew :app:assembleDebug`
 预期: PASS + BUILD SUCCESSFUL
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add app
@@ -1210,7 +1210,7 @@ git commit -m "feat: foreground DownloadService + notification + FileRepository"
 **Interfaces:**
 - 产出 `ShareReceiver` Activity；把收到的 URL 通过 Intent 传给 MainActivity。
 
-- [ ] **Step 1: 写 ShareReceiver（ACTION_SEND 处理，提取 URL，转 MainActivity 后 finish 自身）**
+- [x] **Step 1: 写 ShareReceiver（ACTION_SEND 处理，提取 URL，转 MainActivity 后 finish 自身）**
 
 ```kotlin
 package com.videodl.app
@@ -1243,7 +1243,7 @@ class ShareReceiver : ComponentActivity() {
 }
 ```
 
-- [ ] **Step 2: 写 ShareReceiver instrumented test（用 ActivityScenario test ACTION_SEND）**
+- [x] **Step 2: 写 ShareReceiver instrumented test（用 ActivityScenario test ACTION_SEND）**
 
 ```kotlin
 package com.videodl.app
@@ -1273,12 +1273,12 @@ class ShareReceiverTest {
 
 > 测试细节用 Espresso-Intents 验证转发逻辑，本处留结构，实现时按 Android 测试规范补齐断言。
 
-- [ ] **Step 3: 编译通过**
+- [x] **Step 3: 编译通过**
 
 Run: `./gradlew :app:assembleDebug`
 预期: BUILD SUCCESSFUL
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/ShareReceiver.kt app/src/androidTest
@@ -1297,7 +1297,7 @@ git commit -m "feat: ShareReceiver ACTION_SEND -> MainActivity"
 **Interfaces:**
 - 产出 `VideoDLTheme` 可组合函数；被 Task 14 MainActivity 消费。
 
-- [ ] **Step 1: 写 Color.kt**
+- [x] **Step 1: 写 Color.kt**
 
 ```kotlin
 package com.videodl.app.ui.theme
@@ -1313,7 +1313,7 @@ val DarkColors = androidx.compose.material3.darkColorScheme(
     primary = Primary, secondary = Secondary)
 ```
 
-- [ ] **Step 2: 写 Theme.kt**
+- [x] **Step 2: 写 Theme.kt**
 
 ```kotlin
 package com.videodl.app.ui.theme
@@ -1329,7 +1329,7 @@ fun VideoDLTheme(content: @Composable () -> Unit) {
 }
 ```
 
-- [ ] **Step 3: 写 Type.kt**
+- [x] **Step 3: 写 Type.kt**
 
 ```kotlin
 package com.videodl.app.ui.theme
@@ -1339,7 +1339,7 @@ import androidx.compose.material3.Typography
 val AppTypography = Typography()
 ```
 
-- [ ] **Step 4: 编译通过 + 提交**
+- [x] **Step 4: 编译通过 + 提交**
 
 Run: `./gradlew :app:compileDebugKotlin`
 预期: BUILD SUCCESSFUL
@@ -1360,7 +1360,7 @@ git commit -m "feat: Material 3 theme (light + dark)"
 **Interfaces:**
 - 产出 `HomeUiState` 数据类 + `HomeViewModel`；被 Task 13 HomeScreen 消费。
 
-- [ ] **Step 1: 写 HomeContract.kt（cross-task 共享常量）**
+- [x] **Step 1: 写 HomeContract.kt（cross-task 共享常量）**
 
 ```kotlin
 package com.videodl.app.ui.home
@@ -1368,7 +1368,7 @@ package com.videodl.app.ui.home
 const val EXTRA_SHARE_URL = "com.videodl.app.SHARE_URL"
 ```
 
-- [ ] **Step 2: 写 HomeViewModel**
+- [x] **Step 2: 写 HomeViewModel**
 
 ```kotlin
 package com.videodl.app.ui.home
@@ -1507,7 +1507,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
 > Construction note：`engine.download()` 返回 Flow，需在 ViewModelScope 用 `.collect{}`；Chaquopy 调用跑在 `Dispatchers.IO` 已在 YtdlpEngineImpl 内部处理好。`fetchInfo` + `download` 的协程串行符合桌面版"先抓信息再下载"顺序。
 
-- [ ] **Step 3: 写 HomeViewModelTest（JVM 单测，验证 reducer 函数）**
+- [x] **Step 3: 写 HomeViewModelTest（JVM 单测，验证 reducer 函数）**
 
 用 Turbine 测 StateFlow（`app/build.gradle.kts` 加 `app.cash.turbine:turbine:1.1.0` 测试依赖）：
 ```kotlin
@@ -1526,12 +1526,12 @@ class HomeViewModelPureTest {
 ```
 > HomeViewModel 构造器依赖 `MainApplication.engine`（需要 Chaquopy 真机环境），全链路测试放 `androidTest`，JVM 单测测纯状态 reducer 函数。
 
-- [ ] **Step 4: 编译通过**
+- [x] **Step 4: 编译通过**
 
 Run: `./gradlew :app:compileDebugKotlin`
 预期: BUILD SUCCESSFUL
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/ui/home app/src/test
@@ -1548,7 +1548,7 @@ git commit -m "feat: HomeViewModel state machine"
 **Interfaces:**
 - 消费 `HomeViewModel` / `HomeUiState`；被 Task 14 MainActivity 消费。
 
-- [ ] **Step 1: 写 HomeScreen.kt**
+- [x] **Step 1: 写 HomeScreen.kt**
 
 ```kotlin
 package com.videodl.app.ui.home
@@ -1650,12 +1650,12 @@ fun DropdownChip(label: String, options: List<String>, current: String, onPick: 
 }
 ```
 
-- [ ] **Step 2: 编译通过**
+- [x] **Step 2: 编译通过**
 
 Run: `./gradlew :app:assembleDebug`
 预期: BUILD SUCCESSFUL
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add app/src/main/java/com/videodl/app/ui/home/HomeScreen.kt
@@ -1673,7 +1673,7 @@ git commit -m "feat: HomeScreen Compose UI"
 **Interfaces:**
 - 消费 `ConfigRepository`；产出 `SettingsViewModel` / `SettingsScreen`；被 Task 14 MainActivity 消费。
 
-- [ ] **Step 1: 写 SettingsViewModel**
+- [x] **Step 1: 写 SettingsViewModel**
 
 ```kotlin
 package com.videodl.app.ui.settings
@@ -1702,7 +1702,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 }
 ```
 
-- [ ] **Step 2: 写 SettingsScreen.kt**
+- [x] **Step 2: 写 SettingsScreen.kt**
 
 ```kotlin
 package com.videodl.app.ui.settings
@@ -1784,7 +1784,7 @@ fun DropdownChip(label: String, options: List<String>, current: String, onPick: 
 }
 ```
 
-- [ ] **Step 3: 编译通过 + 提交**
+- [x] **Step 3: 编译通过 + 提交**
 
 Run: `./gradlew :app:assembleDebug`
 预期: BUILD SUCCESSFUL
@@ -1804,7 +1804,7 @@ git commit -m "feat: SettingsViewModel + SettingsScreen"
 **Interfaces:**
 - 产出 `MainActivity` —— App 入口 + 承载 NavController，把 ShareReceiver 转发的 URL 传给 HomeScreen。
 
-- [ ] **Step 1: 写 MainActivity.kt**
+- [x] **Step 1: 写 MainActivity.kt**
 
 ```kotlin
 package com.videodl.app
@@ -1847,16 +1847,16 @@ class MainActivity : ComponentActivity() {
 }
 ```
 
-- [ ] **Step 2: AndroidManifest.xml 加 POST_NOTIFICATIONS 描述字符串到 strings.xml**
+- [x] **Step 2: AndroidManifest.xml 加 POST_NOTIFICATIONS 描述字符串到 strings.xml**
 
 加：`<string name="post_notifications_rationale">下载过程中需要通知栏进度提醒</string>`（运行时权限说明保留给后续迭代）。
 
-- [ ] **Step 3: 构建 debug APK**
+- [x] **Step 3: 构建 debug APK**
 
 Run: `./gradlew :app:assembleDebug`
 预期: BUILD SUCCESSFUL → `app/build/outputs/apk/debug/app-debug.apk`
 
-- [ ] **Step 4: 真机 adb 安装验证（必须做）**
+- [x] **Step 4: 真机 adb 安装验证（必须做）**
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -1868,7 +1868,7 @@ adb shell am start -a android.intent.action.SEND -t text/plain \
 ```
 预期：App 启动、主页渲染、ShareReceiver 能收到链接并跳到 HomeScreen 自动下载。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add -A
@@ -1897,7 +1897,7 @@ keytool -genkey -v -storetype PKCS12 -keystore videodl-release.keystore \
 交互输入：密钥库密码、别名密码、名称等。
 预期产物：`videodl-release.keystore`。**立刻把它加入 `.gitignore`，永远别提交到仓库。**
 
-- [ ] **Step 2: `.gitignore` 排除 keystore 与 local.properties**
+- [x] **Step 2: `.gitignore` 排除 keystore 与 local.properties**
 
 ```
 *.keystore
@@ -1905,7 +1905,7 @@ keytool -genkey -v -storetype PKCS12 -keystore videodl-release.keystore \
 local.properties
 ```
 
-- [ ] **Step 3: 在 `app/build.gradle.kts` 加 release 签名 + ProGuard**
+- [x] **Step 3: 在 `app/build.gradle.kts` 加 release 签名 + ProGuard**
 
 ```kotlin
 android {
@@ -1928,12 +1928,12 @@ android {
 }
 ```
 
-- [ ] **Step 4: 构建 release APK**
+- [x] **Step 4: 构建 release APK**
 
 Run: `./gradlew :app:assembleRelease`
 预期: BUILD SUCCESSFUL → `app/build/outputs/apk/release/app-release.apk`
 
-- [ ] **Step 5: 验证 APK 体积与签名、架构**
+- [x] **Step 5: 验证 APK 体积与签名、架构**
 
 ```bash
 # 确认所有 .so 都在 arm64-v8a（不会误包含 x86_64）
@@ -1944,7 +1944,7 @@ $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/ap
 ```
 预期：仅 `lib/arm64-v8a/*` + 已签名；体积 60–90 MB。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add app/build.gradle.kts .gitignore
