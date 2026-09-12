@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -96,6 +97,12 @@ fun DownloadsScreen(onOpenFile: (String) -> Unit) {
             if (dl.status != com.videodl.app.data.DownloadStatus.Idle) {
                 item { ActiveDownloadCard(dl, onCancel = { DownloadService.cancel(ctx) }) }
             }
+            if (dl.queued.isNotEmpty()) {
+                item { QueueHeader(dl.queued.size) }
+                items(dl.queued, key = { "q-${it.url}" }) { q ->
+                    QueuedCard(q, onRemove = { DownloadService.dropQueued(ctx, q.url) })
+                }
+            }
             if (records.isEmpty() && dl.status == com.videodl.app.data.DownloadStatus.Idle) {
                 item { EmptyHint() }
             }
@@ -126,6 +133,53 @@ private fun EmptyHint() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun QueueHeader(count: Int) {
+    Text(
+        text = "队列（$count）",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** 排队中还没开始的一项：只能"移除"，因为当前那个正在下 */
+@Composable
+private fun QueuedCard(q: com.videodl.app.data.QueuedItem, onRemove: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = q.url,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "等待中 · ${q.label}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Filled.Close, contentDescription = "移出队列")
+            }
+        }
     }
 }
 

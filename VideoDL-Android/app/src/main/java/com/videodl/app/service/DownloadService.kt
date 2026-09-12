@@ -25,6 +25,7 @@ import com.videodl.app.data.DownloadHistory
 import com.videodl.app.data.DownloadRecord
 import com.videodl.app.data.DownloadStatus
 import com.videodl.app.data.FileRepository
+import com.videodl.app.data.QueuedItem
 import com.videodl.app.data.VideoInfo
 import com.videodl.app.engine.DownloadEvent
 import com.videodl.app.engine.DownloadOptions
@@ -40,6 +41,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.util.Log
+
+/**
+ * 通知栏进度文字。抽成纯函数是为了能单测（队列数量要显示出来，
+ * 用户切走 App 后靠它判断"后面还有几个"）。
+ */
+internal fun progressText(percent: Float, speed: String, eta: String, queued: Int = 0): String =
+    buildString {
+        append("${percent.toInt()}%")
+        if (speed.isNotBlank()) append("  ·  ↓$speed")
+        if (eta.isNotBlank()) append("  ·  剩余 $eta")
+        if (queued > 0) append("  ·  队列 $queued")
+    }
 
 /**
  * 下载跑在前台 Service 里 —— 这是手机端必须的做法：
@@ -79,6 +92,7 @@ class DownloadService : Service() {
 
         const val ACTION_START = "com.videodl.app.START"
         const val ACTION_CANCEL = "com.videodl.app.CANCEL"
+        const val ACTION_DROP_QUEUE = "com.videodl.app.DROP_QUEUE"
         const val EXTRA_URL = "url"
         const val EXTRA_FORMAT = "format"
         const val EXTRA_QUALITY = "quality"
@@ -112,6 +126,16 @@ class DownloadService : Service() {
                 })
             }.onFailure { Log.w(TAG, "cancel via service failed: ${it.message}") }
         }
+
+        /** 只把某一项从队列里去掉（当前正在下的不动） */
+        fun dropQueued(ctx: Context, url: String) {
+            runCatching {
+                ctx.startService(Intent(ctx, DownloadService::class.java).apply {
+                    action = ACTION_DROP_QUEUE
+                    putExtra(EXTRA_URL, url)
+                })
+            }.onFailure { Log.w(TAG, "drop queued failed: ${it.message}") }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -141,12 +165,24 @@ class DownloadService : Service() {
                     // 已经有一个在下了：排队，而不是把前一个悄悄取消掉
                     if (queue.size >= MAX_QUEUE) {
                         DownloadCenter.log("[提示] 队列已满（$MAX_QUEUE 个），本次未加入")
+                        Log.d(TAG, "queue full, rejected: $url")
                     } else {
                         queue.addLast(pending)
                         DownloadCenter.log("[提示] 已加入队列：排在 ${queue.size} 个之后")
+                        Log.d(TAG, "queued (position=${queue.size}): $url")
+                        publishQueue()
                     }
                 } else {
                     startJob(pending)
+                }
+            }
+            ACTION_DROP_QUEUE -> {
+                // 从队列里单独去掉一项（队列卡片上的"移除"按钮）
+                val url = intent.getStringExtra(EXTRA_URL).orEmpty()
+                val removed = queue.removeAll { it.url == url }
+                if (removed) {
+                    DownloadCenter.log("[提示] 已从队列中移除：$url")
+                    publishQueue()
                 }
             }
             ACTION_CANCEL -> {
@@ -155,12 +191,19 @@ class DownloadService : Service() {
                 if (queue.isNotEmpty()) {
                     DownloadCenter.log("[提示] 已清空队列（${queue.size} 个）")
                     queue.clear()
+                    publishQueue()
                 }
                 DownloadCenter.log("[提示] 已请求取消当前下载")
             }
             else -> if (runningJob == null && queue.isEmpty()) stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    /** 把队列内容同步给界面（下载页要显示"队列（N）"） */
+    private fun publishQueue() {
+        val snapshot = queue.map { QueuedItem(url = it.url, label = it.quality.ifBlank { "默认画质" }) }
+        DownloadCenter.update { it.copy(queued = snapshot) }
     }
 
     private fun startJob(pending: PendingJob) {
@@ -183,11 +226,14 @@ class DownloadService : Service() {
     /** 当前任务结束后：还有排队就接着下，没有就收工（关掉前台通知） */
     private fun dispatchNext() {
         val next = queue.removeFirstOrNull()
+        publishQueue()
         if (next != null) {
             DownloadCenter.log("[提示] 开始队列中的下一个（还剩 ${queue.size} 个）")
+            Log.d(TAG, "dispatch next from queue, remaining=${queue.size}")
             goForeground(getString(R.string.notif_downloading_title), "准备下载…", 0, false)
             startJob(next)
         } else {
+            Log.d(TAG, "queue empty, stopping service")
             stopForegroundCompat(true)
             stopSelf()
         }
@@ -500,11 +546,7 @@ class DownloadService : Service() {
         val now = System.currentTimeMillis()
         if (now - lastNotify < 400 && percent < 100f) return
         lastNotify = now
-        val text = buildString {
-            append("${percent.toInt()}%")
-            if (speed.isNotBlank()) append("  ·  ↓$speed")
-            if (eta.isNotBlank()) append("  ·  剩余 $eta")
-        }
+        val text = progressText(percent, speed, eta, queue.size)
         safeNotify(buildProgressNotification(
             getString(R.string.notif_downloading_title), text, percent.toInt(), true,
         ))

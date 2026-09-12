@@ -16,6 +16,12 @@ data class VideoInfo(
 
 enum class DownloadStatus { Idle, Fetching, Downloading, Done, Error }
 
+/** 排队等待下载的一项（界面上要在"队列"里列出来） */
+data class QueuedItem(
+    val url: String,
+    val label: String = "",
+)
+
 /**
  * 一次下载的实时快照。
  *
@@ -35,6 +41,8 @@ data class DownloadSnapshot(
     val error: String = "",
     /** 人类可读的保存位置说明，直接显示给用户 */
     val destination: String = "",
+    /** 排队等待的任务（一次只跑一个，其余在这里排队） */
+    val queued: List<QueuedItem> = emptyList(),
 )
 
 /** 下载状态总线：Service 写，界面读。 */
