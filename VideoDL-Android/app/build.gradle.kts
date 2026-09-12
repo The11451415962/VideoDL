@@ -1,8 +1,46 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.chaquo.python")
 }
+
+// ============================================================
+// release 签名配置
+// ------------------------------------------------------------
+// 密钥信息只从 local.properties 或命令行 -P 参数读，两者都不入仓库：
+//   local.properties  → 已被 .gitignore 排除（AGP 本来也用它放 sdk.dir）
+//   -PKEYSTORE_FILE=… → 临时构建用，适合 CI
+//
+// 没有密钥时**不报错**：照样能构建出 app-release-unsigned.apk，
+// 这样"忘了配密钥"不会把日常构建卡死，但也不会悄悄产出没签名的包
+// 冒充已签名包 —— 下面会打印一行提示说明这次是未签名构建。
+//
+// 生成密钥（一次性，自己执行，别人拿不到）：
+//   keytool -genkey -v -storetype PKCS12 -keystore videodl-release.keystore \
+//     -alias videodl -keyalg RSA -keysize 2048 -validity 10000
+// 然后在 local.properties 里补：
+//   KEYSTORE_FILE=videodl-release.keystore
+//   KEYSTORE_PASSWORD=…
+//   KEY_ALIAS=videodl
+//   KEY_PASSWORD=…
+// ============================================================
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun signingProp(name: String): String? =
+    (findProperty(name) as String?)?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty(name)?.takeIf { it.isNotBlank() }
+
+val keystoreFile: File? = signingProp("KEYSTORE_FILE")?.let { raw ->
+    val f = File(raw)
+    if (f.isAbsolute) f else rootProject.file(raw)
+}
+val hasKeystore: Boolean = keystoreFile?.exists() == true
 
 android {
     namespace = "com.videodl.app"
@@ -15,11 +53,26 @@ android {
         versionName = "1.0.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
+    signingConfigs {
+        if (hasKeystore) {
+            create("release") {
+                storeFile = keystoreFile
+                storePassword = signingProp("KEYSTORE_PASSWORD") ?: ""
+                keyAlias = signingProp("KEY_ALIAS") ?: "videodl"
+                keyPassword = signingProp("KEY_PASSWORD") ?: ""
+            }
+        }
+    }
     buildTypes {
         release {
+            // 故意不开混淆：proguard-rules.pro 目前是空的，而 Chaquopy 靠反射
+            // 调 Python 桥、Compose/Coil 也有大量反射入口。开着混淆而没写 keep
+            // 规则的直接后果是 release 包能装上但一跑就崩，而当前没有真机可验。
+            // 等有真机跑通 release 之后再开混淆并补规则。
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"),
                           "proguard-rules.pro")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
     compileOptions {
@@ -31,6 +84,21 @@ android {
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    }
+}
+
+// 提示故意用纯 ASCII 英文：Gradle 按 UTF-8 输出，Windows 控制台默认 GBK，
+// 中文在这条最需要被看见的提示里会变成乱码。
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name == "assembleRelease" || it.name == "bundleRelease" }) {
+        if (hasKeystore) {
+            logger.lifecycle("[signing] release keystore: ${keystoreFile?.absolutePath}")
+        } else {
+            logger.lifecycle(
+                "[signing] No release keystore found -> producing " +
+                    "app-release-unsigned.apk (NOT signed, cannot be installed). " +
+                    "See the comment at the top of app/build.gradle.kts.")
+        }
     }
 }
 

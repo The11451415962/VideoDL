@@ -43,9 +43,9 @@ captures/
 # Comment the following line if keeping machine-specific IntelliJ XMLs is desired:
 .idea/
 
-# Keystore files
-# Uncomment the following line if you do not want to store your keystore files in the repo.
-#*.jks
+# Keystore files —— 签名密钥绝不入库（丢了就不能给已装用户升级）
+*.jks
+*.keystore
 
 # External native build folder generated in modern Android Studio versions
 .externalNativeBuild
