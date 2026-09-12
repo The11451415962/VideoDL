@@ -72,11 +72,12 @@ _bootstrap_pyside6()
 from PySide6.QtCore import Qt, QObject, QPointF, QRectF, QSize, Signal, QUrl
 from PySide6.QtGui import (QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF,
                            QPalette, QTextCursor, QTextCharFormat)
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                               QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-                               QPushButton, QComboBox, QProgressBar, QTextEdit,
-                               QFrame, QFileDialog, QMessageBox,
-                               QGraphicsDropShadowEffect, QScrollArea)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QDialog,
+                               QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+                               QLineEdit, QPushButton, QComboBox, QCheckBox,
+                               QProgressBar, QTextEdit, QFrame, QFileDialog,
+                               QMessageBox, QGraphicsDropShadowEffect,
+                               QScrollArea, QSizePolicy)
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 
 import video_downloader as core  # 复用 yt-dlp 后端逻辑
@@ -314,6 +315,47 @@ def _make_button(text: str, obj: str = "secondary", height: int = 36,
     return btn
 
 
+def _make_combo(items, current):
+    """items = [(显示标签, 原始值)]；显示中文，内部仍存 config.json 的原始值。"""
+    cb = QComboBox()
+    cb.setObjectName("combo")
+    for label, value in items:
+        cb.addItem(label, value)
+    idx = cb.findData(current)
+    cb.setCurrentIndex(idx if idx >= 0 else 0)
+    cb.setFixedHeight(36)
+    cb.setCursor(Qt.PointingHandCursor)
+    return cb
+
+
+def _make_field(label, widget):
+    """字段标签 + 控件的竖排组合（标签在上）。"""
+    box = QVBoxLayout()
+    box.setSpacing(4)
+    box.setContentsMargins(0, 0, 0, 0)
+    lbl = QLabel(label)
+    lbl.setObjectName("fieldLabel")
+    box.addWidget(lbl)
+    box.addWidget(widget)
+    wrap = QWidget()
+    wrap.setObjectName("fieldWrap")
+    wrap.setLayout(box)
+    return wrap
+
+
+def _make_field_row(label, *widgets):
+    """字段标签 + 一整行（输入框 + 按钮）的组合。"""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    row.setContentsMargins(0, 0, 0, 0)
+    for i, w in enumerate(widgets):
+        row.addWidget(w, 1 if i == 0 else 0)
+    holder = QWidget()
+    holder.setObjectName("fieldWrap")
+    holder.setLayout(row)
+    return _make_field(label, holder)
+
+
 # ============================================================
 # 日志视图：压小默认 sizeHint
 # ------------------------------------------------------------
@@ -336,6 +378,277 @@ class DownloadSignals(QObject):
     log = Signal(str)
     error = Signal(dict)
     core_update = Signal(str)   # "更新核心" 在工作线程跑，结果必须回主线程更新界面
+
+
+# ============================================================
+# 设置对话框（代理 / Cookie / FFmpeg / 其他）
+# ------------------------------------------------------------
+# 与 tkinter 版 SettingsDialog 等价：同样四组配置、同样落盘字段。
+# 全程在副本上改，点「保存」才写 config.json；点「取消」原样丢弃。
+# ============================================================
+class SettingsDialog(QDialog):
+    COOKIE_BROWSERS = ["chrome", "firefox", "edge", "opera", "brave", "safari"]
+
+    PROXY_MODES = [("自动（YouTube 走代理，其余直连）", "auto"),
+                   ("直连（完全不用代理）", "direct"),
+                   ("强制代理（全部走代理）", "proxy")]
+    COOKIE_MODES = [("不使用", "none"),
+                    ("cookies.txt 文件", "file"),
+                    ("从浏览器读取", "browser")]
+
+    def __init__(self, parent, config: dict, on_save):
+        super().__init__(parent)
+        self.setWindowTitle("设置")
+        self.setObjectName("settingsDialog")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+
+        self._on_save = on_save
+        self._cfg = dict(config)        # 副本：取消不写入
+
+        self._build_ui()
+
+        # 自动换行的标签会把 sizeHint 宽度顶到"整行文字不换行"的宽度
+        # （实测 ffmpeg 长路径能顶到 1458px，窗口一开就撑满屏），
+        # 所以横向策略设为 Ignored：宽度由布局给，文字自己换行。
+        for lbl in (self.lbl_proxy_hint, self.lbl_ffmpeg_state):
+            lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.resize(640, self.sizeHint().height())
+
+        # 子窗口没有 Mica，用不透明底代替，否则卡片层次看不出来
+        self.setStyleSheet(
+            f"QDialog#settingsDialog {{ background-color: {PAGE_FALLBACK}; }}")
+
+    # ---------------- 构建 ----------------
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        root.addWidget(self._build_proxy_card())
+        root.addWidget(self._build_cookie_card())
+        root.addWidget(self._build_other_card())
+        root.addLayout(self._build_button_row())
+
+    @staticmethod
+    def _card(title: str):
+        """标题 + 一个两列栅格的卡片，返回 (卡片, 栅格)。"""
+        card = _make_card()
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 12, 16, 14)
+        lay.setSpacing(10)
+
+        head = QLabel(title)
+        head.setObjectName("cardTitle")
+        lay.addWidget(head)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        lay.addLayout(grid)
+        return card, grid
+
+    def _build_proxy_card(self):
+        card, grid = self._card("代理设置")
+
+        self.cb_proxy_mode = _make_combo(
+            self.PROXY_MODES, self._cfg.get("proxy_mode", "auto"))
+        grid.addWidget(_make_field("模式", self.cb_proxy_mode), 0, 0)
+
+        self.ed_proxy_url = QLineEdit(self._cfg.get("proxy_url", "") or "")
+        self.ed_proxy_url.setFixedHeight(36)
+        self.ed_proxy_url.setPlaceholderText("http://127.0.0.1:7897")
+        grid.addWidget(_make_field("地址", self.ed_proxy_url), 0, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        self.lbl_proxy_hint = QLabel()
+        self.lbl_proxy_hint.setObjectName("fieldLabel")
+        self.lbl_proxy_hint.setWordWrap(True)
+        grid.addWidget(self.lbl_proxy_hint, 1, 0, 1, 2)
+
+        self.cb_proxy_mode.currentIndexChanged.connect(self._on_proxy_mode_change)
+        self._on_proxy_mode_change()
+        return card
+
+    def _build_cookie_card(self):
+        card, grid = self._card("Cookie 设置")
+
+        self.cb_cookie_mode = _make_combo(
+            self.COOKIE_MODES, self._cfg.get("cookie_mode", "none"))
+        grid.addWidget(_make_field("模式", self.cb_cookie_mode), 0, 0)
+
+        self.cb_browser = _make_combo(
+            [(b, b) for b in self.COOKIE_BROWSERS],
+            self._cfg.get("cookie_browser", "chrome"))
+        self.wrap_browser = _make_field("浏览器", self.cb_browser)
+        grid.addWidget(self.wrap_browser, 0, 1)
+
+        self.ed_cookie_path = QLineEdit(self._cfg.get("cookie_path", "") or "")
+        self.ed_cookie_path.setFixedHeight(36)
+        self.ed_cookie_path.setPlaceholderText("cookies.txt 的完整路径")
+        self.wrap_cookie_path = _make_field_row(
+            "文件", self.ed_cookie_path,
+            _make_button("浏览", "secondary", 36, on_click=self._browse_cookie))
+        grid.addWidget(self.wrap_cookie_path, 1, 0, 1, 2)
+
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        self.cb_cookie_mode.currentIndexChanged.connect(self._on_cookie_mode_change)
+        self._on_cookie_mode_change()
+        return card
+
+    def _build_other_card(self):
+        card, grid = self._card("其他")
+
+        self.chk_auto_open = QCheckBox("下载完成后自动打开文件夹")
+        self.chk_auto_open.setChecked(bool(self._cfg.get("auto_open_folder", True)))
+        grid.addWidget(self.chk_auto_open, 0, 0, 1, 2)
+
+        self.ed_ffmpeg = QLineEdit(self._cfg.get("ffmpeg_path", "") or "")
+        self.ed_ffmpeg.setFixedHeight(36)
+        self.ed_ffmpeg.setPlaceholderText("留空 = 自动查找")
+        self.wrap_ffmpeg = _make_field_row(
+            "FFmpeg 路径", self.ed_ffmpeg,
+            _make_button("浏览", "secondary", 36, on_click=self._browse_ffmpeg))
+        grid.addWidget(self.wrap_ffmpeg, 1, 0, 1, 2)
+
+        # 显示"实际会用哪一个"，比只给一个空输入框有用
+        self.lbl_ffmpeg_state = QLabel()
+        self.lbl_ffmpeg_state.setObjectName("fieldLabel")
+        self.lbl_ffmpeg_state.setWordWrap(True)
+        grid.addWidget(self.lbl_ffmpeg_state, 2, 0, 1, 2)
+
+        self.ed_ffmpeg.textChanged.connect(self._refresh_ffmpeg_state)
+        self._refresh_ffmpeg_state()
+        return card
+
+    def _build_button_row(self):
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(_make_button("恢复默认值", "ghost", 36,
+                                   on_click=self._reset_defaults))
+        row.addStretch(1)
+        row.addWidget(_make_button("取消", "secondary", 36, width=84,
+                                   on_click=self.reject))
+        row.addWidget(_make_button("保存", "primary", 36, width=84,
+                                   on_click=self._on_accept))
+        return row
+
+    # ---------------- 联动 ----------------
+    def _on_proxy_mode_change(self, *_):
+        """直连模式下地址无意义 → 置灰，避免用户以为填了就会生效。"""
+        mode = self.cb_proxy_mode.currentData()
+        self.ed_proxy_url.setEnabled(mode != "direct")
+        if mode == "direct":
+            hint = "所有站点都直连，不使用代理地址。"
+        elif mode == "proxy":
+            hint = "全部流量走下面的地址。站点打不开时会回退直连并在日志里说明。"
+        else:
+            hint = "YouTube 类站点走代理，其余直连；地址连不上时自动直连。"
+        self.lbl_proxy_hint.setText(hint)
+
+    def _on_cookie_mode_change(self, *_):
+        mode = self.cb_cookie_mode.currentData()
+        self.wrap_cookie_path.setVisible(mode == "file")
+        self.wrap_browser.setVisible(mode == "browser")
+
+    def _refresh_ffmpeg_state(self, *_):
+        path = self.ed_ffmpeg.text().strip()
+        if path and not os.path.isfile(path):
+            self.lbl_ffmpeg_state.setText("当前使用：该路径不存在，保存前请修正")
+            return
+        found = core.find_ffmpeg({"ffmpeg_path": path})
+        if found:
+            self.lbl_ffmpeg_state.setText(f"当前使用：{found}")
+        else:
+            self.lbl_ffmpeg_state.setText(
+                "当前使用：未找到 ffmpeg（无 ffmpeg 时无法合并音视频流）")
+
+    # ---------------- 浏览 ----------------
+    def _browse_cookie(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 cookies.txt", "", "文本文件 (*.txt);;所有文件 (*)")
+        if path:
+            self.ed_cookie_path.setText(path)
+
+    def _browse_ffmpeg(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 ffmpeg 可执行文件", "",
+            "ffmpeg (ffmpeg.exe ffmpeg);;所有文件 (*)")
+        if path:
+            self.ed_ffmpeg.setText(path)
+            self._refresh_ffmpeg_state()
+
+    # ---------------- 恢复默认 ----------------
+    def _reset_defaults(self):
+        defaults = core.DEFAULT_CONFIG
+        self.cb_proxy_mode.setCurrentIndex(
+            max(0, self.cb_proxy_mode.findData(defaults["proxy_mode"])))
+        self.ed_proxy_url.setText(defaults["proxy_url"])
+        self.cb_cookie_mode.setCurrentIndex(
+            max(0, self.cb_cookie_mode.findData(defaults["cookie_mode"])))
+        self.ed_cookie_path.setText(defaults["cookie_path"])
+        self.cb_browser.setCurrentIndex(
+            max(0, self.cb_browser.findData(defaults["cookie_browser"])))
+        self.chk_auto_open.setChecked(defaults["auto_open_folder"])
+        self.ed_ffmpeg.setText("")
+        self._on_proxy_mode_change()
+        self._on_cookie_mode_change()
+        self._refresh_ffmpeg_state()
+
+    # ---------------- 校验 / 保存 ----------------
+    def _collect(self) -> dict:
+        cfg = dict(self._cfg)
+        cfg.update({
+            "proxy_mode": self.cb_proxy_mode.currentData() or "auto",
+            "proxy_url": self.ed_proxy_url.text().strip(),
+            "cookie_mode": self.cb_cookie_mode.currentData() or "none",
+            "cookie_path": self.ed_cookie_path.text().strip(),
+            "cookie_browser": self.cb_browser.currentData() or "chrome",
+            "auto_open_folder": self.chk_auto_open.isChecked(),
+            "ffmpeg_path": self.ed_ffmpeg.text().strip(),
+        })
+        return cfg
+
+    def _validate(self, cfg: dict) -> str | None:
+        """返回第一条错误说明；全部通过返回 None。"""
+        if cfg["proxy_mode"] in ("auto", "proxy"):
+            url = cfg["proxy_url"]
+            if not url:
+                return "代理地址不能为空。\n如果不想用代理，请把模式改成「直连」。"
+            if not re.match(r"^(https?|socks[45]?)://", url):
+                return "代理地址需要带协议前缀，例如 http://127.0.0.1:7897"
+
+        if cfg["cookie_mode"] == "file":
+            if not cfg["cookie_path"]:
+                return "选择「cookies.txt 文件」后需要指定文件路径。"
+            if not os.path.isfile(cfg["cookie_path"]):
+                return f"找不到 cookies.txt：\n{cfg['cookie_path']}"
+
+        if cfg["ffmpeg_path"] and not os.path.isfile(cfg["ffmpeg_path"]):
+            return f"找不到 ffmpeg：\n{cfg['ffmpeg_path']}\n\n留空可让程序自动查找。"
+
+        if not cfg["save_dir"]:
+            return "保存目录不能为空。"
+
+        return None
+
+    def _on_accept(self):
+        cfg = self._collect()
+        err = self._validate(cfg)
+        if err:
+            QMessageBox.warning(self, "设置", err)
+            return
+        try:
+            core.save_config(cfg)
+        except OSError as e:
+            QMessageBox.critical(self, "设置", f"写入 config.json 失败：\n{e}")
+            return
+        self._on_save(cfg)
+        self.accept()
 
 
 # ============================================================
@@ -517,29 +830,11 @@ class VideoDownloaderWindow(QMainWindow):
     @staticmethod
     def _make_combo(items, current):
         """items = [(显示标签, 原始值)]；显示中文，内部仍存 config.json 的原始值。"""
-        cb = QComboBox()
-        cb.setObjectName("combo")
-        for label, value in items:
-            cb.addItem(label, value)
-        idx = cb.findData(current)
-        cb.setCurrentIndex(idx if idx >= 0 else 0)
-        cb.setFixedHeight(36)
-        cb.setCursor(Qt.PointingHandCursor)
-        return cb
+        return _make_combo(items, current)
 
     @staticmethod
     def _make_field(label, widget):
-        box = QVBoxLayout()
-        box.setSpacing(4)
-        box.setContentsMargins(0, 0, 0, 0)
-        lbl = QLabel(label)
-        lbl.setObjectName("fieldLabel")
-        box.addWidget(lbl)
-        box.addWidget(widget)
-        wrap = QWidget()
-        wrap.setObjectName("fieldWrap")
-        wrap.setLayout(box)
-        return wrap
+        return _make_field(label, widget)
 
     @classmethod
     def _make_field_row(cls, label, row_layout):
@@ -786,6 +1081,15 @@ class VideoDownloaderWindow(QMainWindow):
             QPushButton#ghost:pressed {{ background-color: #DDE5F0; }}
             QPushButton#ghost:disabled {{ color: {TEXT_DISABLED}; background: transparent; }}
 
+            /* ---- 复选框（只接管文字；勾选框交给 Fusion 画，避免自绘丢失勾状态） ---- */
+            QCheckBox {{
+                color: {TEXT_MAIN};
+                font-size: 13px;
+                spacing: 8px;
+                background: transparent;
+            }}
+            QCheckBox:disabled {{ color: {TEXT_DISABLED}; }}
+
             /* ---- 进度条 ---- */
             QProgressBar {{
                 background-color: #DFE5EC;
@@ -916,14 +1220,23 @@ class VideoDownloaderWindow(QMainWindow):
         core.ensure_dir(new_dir)
         core.save_config(self.config)
 
-    # ---------------- 设置（简版） ----------------
+    # ---------------- 设置 ----------------
     def _open_settings(self):
-        # 这里打开一个简单说明对话框；如需完整设置页可在此扩展。
-        QMessageBox.information(
-            self, "设置",
-            "当前为 Fluent 精简版界面。\n\n"
-            "代理模式 / Cookie / 自动打开文件夹等高级选项，\n"
-            "请编辑 config.json，或参考原版 video_downloader.py 的设置对话框。")
+        SettingsDialog(self, self.config, self._on_settings_saved).exec()
+
+    def _on_settings_saved(self, cfg: dict):
+        """设置页保存后回灌主窗口：配置本体 + 顶部下拉框保持一致。
+
+        下拉框的 currentIndexChanged 也接了落盘，这里必须先掐掉信号 ——
+        配置已经由设置页写好了，再走一遍只会用旧值重写一次 config.json。
+        """
+        self.config = cfg
+        idx = self.cb_proxy.findData(cfg["proxy_mode"])
+        if idx >= 0 and idx != self.cb_proxy.currentIndex():
+            self.cb_proxy.blockSignals(True)
+            self.cb_proxy.setCurrentIndex(idx)
+            self.cb_proxy.blockSignals(False)
+        self._append_log("[设置] 配置已更新")
 
     # ---------------- 同步 UI 到配置 ----------------
     def _sync_ui_to_config(self):
