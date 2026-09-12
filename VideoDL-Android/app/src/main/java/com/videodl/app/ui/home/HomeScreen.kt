@@ -27,6 +27,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -206,17 +207,21 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp),
                     ) {
-                        FilledTonalIconButton(
+                        // 这两个按钮以前都是同一个 PlayArrow 图标、且没有文字 —— 长得一模一样，
+                        // 用户分不出哪个是"只要音频"，点错就得到一个只有声音的文件
+                        // （真机上出现过：下完视频"只有声音没有画面"）。
+                        // 改成带文字的按钮，行为一眼可见。
+                        FilledTonalButton(
                             onClick = { vm.startAudioDownload() },
                             enabled = !state.busy,
                         ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "仅音频")
+                            Text("仅音频")
                         }
-                        FilledTonalIconButton(
+                        Button(
                             onClick = { vm.startDownload() },
                             enabled = !state.busy,
                         ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "下载视频")
+                            Text("视频")
                         }
                     }
                 }
