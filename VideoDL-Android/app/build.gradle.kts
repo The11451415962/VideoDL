@@ -43,6 +43,14 @@ chaquopy {
     sourceSets { get("main").srcDir("src/main/python") }
 }
 
+// Chaquopy 会把 src/main/python 整个目录打进 APK，包括宿主 Python 生成的
+// __pycache__（版本还和目标 3.10 不匹配）。不清理就会把无用的 .pyc 一起发布。
+tasks.named("preBuild") {
+    doFirst {
+        file("src/main/python/__pycache__").deleteRecursively()
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")

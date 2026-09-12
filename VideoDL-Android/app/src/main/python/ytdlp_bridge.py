@@ -182,46 +182,26 @@ def _final_path(info, output_path):
     return output_path
 
 
-def _ensure_importable(path, ffmpeg_location, duration=0):
-    """确保产出文件能被手机相册 / 剪映直接导入（H.264 + AAC + faststart）。
+def _run_transcode(ffmpeg_location, path, tmp, extra, total):
+    """跑一次 ffmpeg 转码，返回 (returncode, 尾部输出)。
 
-    格式选择已经优先挑 avc1/mp4a 了，但有些清晰度只提供 HEVC/AV1（例如 B 站
-    1080P+ / 4K）。这时 relabel 成 .mp4 是骗人的 —— 用打包进来的 ffmpeg
-    真转一遍，用户就不用再去在线转码平台。
-
-    返回 (ok, reason)；reason == "cancelled" 表示用户中断。
+    边跑边把进度回传给进度条；用户取消时立刻杀掉进程。
     """
     global _cancel_flag
-    if not os.path.isfile(path):
-        return True, ""
-
-    vcodec, acodec, probed_dur = _probe(_ffprobe_path(ffmpeg_location), path)
-    if vcodec is None:
-        _log("[提示] 读不到编码信息，跳过兼容性检查")
-        return True, ""
-    if vcodec in ("h264",) and acodec in ("aac", None, ""):
-        return True, ""
-    if not ffmpeg_location or not os.path.isfile(ffmpeg_location):
-        _log(f"[警告] 视频编码是 {vcodec}/{acodec}，剪映等 App 可能不支持；"
-             f"未找到 ffmpeg，无法自动转码")
-        return False, f"codec={vcodec}/{acodec}"
-
-    total = duration or probed_dur or 0
-    _log(f"[提示] 视频编码是 {vcodec}（剪映不支持），正在转成 H.264 + AAC…")
-    tmp = path + ".compat.mp4"
     cmd = [ffmpeg_location, "-y", "-hide_banner", "-loglevel", "error",
            "-i", path,
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-c:v", "libx264", "-preset", "veryfast",
+           # 只限制"超过 1080P"的情况：4K 用手机软件编码会慢到无法接受
+           "-vf", "scale=-2:'min(1080,ih)'",
            "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "192k",
-           "-movflags", "+faststart",
-           "-progress", "pipe:1", "-nostats", tmp]
+           "-movflags", "+faststart"] + extra + [tmp]
+
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
     except Exception as e:
-        _log(f"[警告] 无法启动转码：{e}")
-        return False, str(e)
+        return 127, [f"无法启动 ffmpeg: {e}"]
 
     tail = []
     try:
@@ -231,8 +211,7 @@ def _ensure_importable(path, ffmpeg_location, duration=0):
                     proc.kill()
                 except Exception:
                     pass
-                _log("[提示] 已取消转码")
-                return False, "cancelled"
+                return -1, ["cancelled"]
             line = raw.decode("utf-8", "replace").strip()
             if line.startswith("out_time_ms=") and total > 0:
                 try:
@@ -251,26 +230,75 @@ def _ensure_importable(path, ffmpeg_location, duration=0):
                 del tail[:-6]
         proc.wait(timeout=30)
     except Exception as e:
-        _log(f"[警告] 转码过程出错：{e}")
-        return False, str(e)
+        tail.append(f"转码过程异常: {e}")
     finally:
         try:
             proc.stdout.close()
         except Exception:
             pass
+    return proc.returncode, tail
 
-    if _cancel_flag:
-        return False, "cancelled"
-    if proc.returncode != 0 or not os.path.isfile(tmp):
-        _log(f"[警告] 转码失败（返回码 {proc.returncode}）：{' | '.join(tail)[:300]}")
-        return False, "transcode-failed"
-    try:
-        os.replace(tmp, path)
-    except Exception as e:
-        _log(f"[警告] 转码结果写入失败：{e}")
-        return False, str(e)
-    _log("[完成] 已转成 H.264 + AAC，手机相册 / 剪映可直接导入")
-    return True, ""
+
+def _ensure_importable(path, ffmpeg_location, duration=0):
+    """确保产出文件能被手机相册 / 剪映直接导入（H.264 + AAC + faststart）。
+
+    格式选择已经优先挑 avc1/mp4a 了，但有些清晰度只提供 HEVC/AV1（例如 B 站
+    1080P+ / 4K）。这时把它命名成 .mp4 是骗人的 —— 用打包进来的 ffmpeg
+    真转一遍，用户就不用再去在线转码平台。
+
+    打包的精简 ffmpeg 未必支持全部选项（实测它连 crf 选项都没有），
+    所以先试完整参数，失败再降级重试一次。
+
+    返回 (ok, reason)；reason == "cancelled" 表示用户中断。
+    """
+    global _cancel_flag
+    if not os.path.isfile(path):
+        return True, ""
+
+    vcodec, acodec, probed_dur = _probe(_ffprobe_path(ffmpeg_location), path)
+    if vcodec is None:
+        _log("[提示] 读不到编码信息，跳过兼容性检查")
+        return True, ""
+    if vcodec == "h264" and acodec in ("aac", None, ""):
+        return True, ""
+    if not ffmpeg_location or not os.path.isfile(ffmpeg_location):
+        _log(f"[警告] 视频编码是 {vcodec}/{acodec}，剪映等 App 可能不支持；"
+             f"未找到 ffmpeg，无法自动转码")
+        return False, f"codec={vcodec}/{acodec}"
+
+    total = duration or probed_dur or 0
+    _log(f"[提示] 视频编码是 {vcodec}（剪映不支持），正在转成 H.264 + AAC…")
+    tmp = path + ".compat.mp4"
+
+    # 第一次：质量优先（crf）+ 实时进度；失败则降级为固定码率、不带进度协议
+    attempts = [
+        (["-crf", "20", "-progress", "pipe:1", "-nostats"], "crf + 进度"),
+        (["-b:v", "4000k"], "固定码率降级"),
+    ]
+    for extra, desc in attempts:
+        if _cancel_flag:
+            return False, "cancelled"
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        rc, tail = _run_transcode(ffmpeg_location, path, tmp, extra, total)
+        if rc == -1:
+            _log("[提示] 已取消转码")
+            return False, "cancelled"
+        if rc == 0 and os.path.isfile(tmp):
+            try:
+                os.replace(tmp, path)
+            except Exception as e:
+                _log(f"[警告] 转码结果写入失败：{e}")
+                return False, str(e)
+            _log("[完成] 已转成 H.264 + AAC，手机相册 / 剪映可直接导入")
+            return True, ""
+        _log(f"[警告] 转码失败（{desc}）：{' | '.join(tail)[:200]}")
+
+    _log("[警告] 两种参数都失败，已保留原文件；可直接用较低清晰度重下（1080P 一般是 H.264）")
+    return False, "transcode-failed"
 
 
 def download(url, output_path, args_list, ffmpeg_location=""):
