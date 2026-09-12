@@ -462,6 +462,161 @@ def _startupinfo():
 
 
 # ============================================================
+# 兼容性兜底（H.264 + AAC）—— 与安卓版 ytdlp_bridge.py 同一套逻辑
+# ------------------------------------------------------------
+# 格式选择已经优先挑 avc1 + mp4a 了，但有些清晰度只提供 HEVC/AV1
+# （例如 B 站 1080P+ / 4K）。这时把它命名成 .mp4 是骗人的：剪映、相册
+# 打开就报"不支持的格式"，用户只能去在线转码平台。这里真转一遍。
+# ============================================================
+def _ffprobe_path(ffmpeg_path: str | None) -> str | None:
+    """推导 ffprobe 路径：与 ffmpeg 同目录，兼容 .exe 与安卓的 libffprobe.so。"""
+    if not ffmpeg_path:
+        return None
+    d = os.path.dirname(ffmpeg_path)
+    base = os.path.basename(ffmpeg_path)
+    cands = []
+    if base.endswith(".so"):
+        cands.append(os.path.join(d, base.replace("ffmpeg", "ffprobe")))
+    cands += [
+        os.path.join(d, base.replace("ffmpeg", "ffprobe")),
+        os.path.join(d, "ffprobe.exe"),
+        os.path.join(d, "ffprobe"),
+    ]
+    for p in cands:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def probe_codecs(path: str, ffmpeg_path: str | None) -> tuple[str | None, str | None, float]:
+    """返回 (vcodec, acodec, duration)；探测失败返回 (None, None, 0)。"""
+    ffprobe = _ffprobe_path(ffmpeg_path)
+    if not ffprobe:
+        return None, None, 0.0
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name:format=duration",
+             "-of", "json", path],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=60, startupinfo=_startupinfo(),
+        )
+        data = json.loads((out.stdout or b"{}").decode("utf-8", "replace"))
+    except Exception:
+        return None, None, 0.0
+    vcodec = acodec = None
+    for st in data.get("streams", []):
+        if st.get("codec_type") == "video" and vcodec is None:
+            vcodec = (st.get("codec_name") or "").lower()
+        elif st.get("codec_type") == "audio" and acodec is None:
+            acodec = (st.get("codec_name") or "").lower()
+    try:
+        duration = float(data.get("format", {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return vcodec, acodec, duration
+
+
+def _run_transcode(ffmpeg_path, src, tmp, extra, total, progress_cb, cancel_check):
+    """跑一次转码，返回 (返回码, 尾部输出)。rc == -1 表示用户取消。"""
+    cmd = [ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", src,
+           "-c:v", "libx264", "-preset", "veryfast",
+           # 只限制"超过 1080P"的情况：再高的分辨率转码太慢、手机剪辑也用不上
+           "-vf", "scale=-2:'min(1080,ih)'",
+           "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "192k",
+           "-movflags", "+faststart"] + list(extra) + [tmp]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, startupinfo=_startupinfo(),
+        )
+    except Exception as e:
+        return 127, [f"无法启动 ffmpeg: {e}"]
+
+    tail: list[str] = []
+    try:
+        for line in proc.stdout:
+            if cancel_check and cancel_check():
+                proc.kill()
+                return -1, ["cancelled"]
+            line = line.strip()
+            if line.startswith("out_time_ms=") and total > 0 and progress_cb:
+                try:
+                    done_s = int(line.split("=", 1)[1]) / 1_000_000.0
+                    progress_cb(max(0.0, min(99.0, done_s / total * 100.0)))
+                except ValueError:
+                    pass
+            elif line and not line.startswith(("frame=", "fps=", "bitrate=",
+                                               "total_size=", "out_time",
+                                               "dup_frames=", "drop_frames=",
+                                               "speed=", "progress=")):
+                tail.append(line)
+                del tail[:-6]
+        proc.wait(timeout=30)
+    except Exception as e:
+        tail.append(f"转码异常: {e}")
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+    return proc.returncode, tail
+
+
+def ensure_importable(path: str, ffmpeg_path: str | None, duration: float = 0,
+                      log_cb=print, progress_cb=None,
+                      cancel_check=None) -> tuple[bool, str]:
+    """确保文件真的能被手机相册 / 剪映导入。返回 (ok, reason)。"""
+    if not os.path.isfile(path):
+        return True, ""
+    vcodec, acodec, probed = probe_codecs(path, ffmpeg_path)
+    if vcodec is None:
+        log_cb("[提示] 读不到编码信息，跳过兼容性检查")
+        return True, ""
+    if vcodec == "h264" and acodec in ("aac", None, ""):
+        return True, ""
+    if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
+        log_cb(f"[警告] 视频编码是 {vcodec}/{acodec}，剪映等 App 可能不支持；"
+               f"未找到 ffmpeg，无法自动转码")
+        return False, f"codec={vcodec}/{acodec}"
+
+    total = duration or probed or 0
+    log_cb(f"[提示] 视频编码是 {vcodec}（剪映不支持），正在转成 H.264 + AAC…")
+    tmp = path + ".compat.mp4"
+    attempts = [
+        (["-crf", "20", "-progress", "pipe:1", "-nostats"], "crf + 进度"),
+        (["-b:v", "4000k"], "固定码率降级"),
+    ]
+    for extra, desc in attempts:
+        if cancel_check and cancel_check():
+            return False, "cancelled"
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        rc, tail = _run_transcode(ffmpeg_path, path, tmp, extra, total,
+                                  progress_cb, cancel_check)
+        if rc == -1:
+            log_cb("[提示] 已取消转码")
+            return False, "cancelled"
+        if rc == 0 and os.path.isfile(tmp):
+            try:
+                os.replace(tmp, path)
+            except OSError as e:
+                log_cb(f"[警告] 转码结果写入失败：{e}")
+                return False, str(e)
+            log_cb("[完成] 已转成 H.264 + AAC，手机相册 / 剪映可直接导入")
+            return True, ""
+        log_cb(f"[警告] 转码失败（{desc}）：{' | '.join(tail)[:200]}")
+
+    log_cb("[警告] 两种参数都失败，已保留原文件；可改用较低清晰度重下（1080P 一般是 H.264）")
+    return False, "transcode-failed"
+
+
+# ============================================================
 # 下载器（独立线程运行）
 # ============================================================
 class Downloader:
@@ -482,6 +637,7 @@ class Downloader:
         self._proc = None
         self._output_lines: list[str] = []  # 收集输出用于诊断
         self._cancelled = False              # 用户主动取消标志
+        self._duration = 0                   # 视频时长（转码进度用）
 
     def run(self) -> None:
         """主流程：抓信息 → 下载"""
@@ -494,6 +650,10 @@ class Downloader:
         # 阶段 1：获取视频信息
         info = self._fetch_info()
         if info:
+            try:
+                self._duration = int(info.get("duration") or 0)
+            except (TypeError, ValueError):
+                self._duration = 0
             # 用标题同步重建输出路径（必须在 _download 之前，否则与下载线程竞态）
             self._apply_title_path(info)
             self.info_cb(info)
@@ -632,6 +792,15 @@ class Downloader:
             return
 
         if rc == 0:
+            # 下载成功后再确认编码真的能被剪映/相册吃下（必要时就地转码）
+            ok, reason = ensure_importable(
+                self.output_path, self.ffmpeg_path, self._duration,
+                log_cb=self.log_cb, progress_cb=self.progress_cb,
+                cancel_check=lambda: self._cancelled,
+            )
+            if reason == "cancelled":
+                self.done_cb(False, "已停止下载")
+                return
             self.progress_cb(100.0)
             self.done_cb(True, "下载完成！")
         else:
