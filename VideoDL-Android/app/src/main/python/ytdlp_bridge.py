@@ -1,8 +1,5 @@
 """bridge for VideoDL Android. Chaquopy loads this from assets."""
 import json
-import os
-import subprocess
-import sys
 from yt_dlp import YoutubeDL
 
 _progress_hook = None
@@ -137,11 +134,6 @@ def download(url, output_path, args_list, ffmpeg_location=""):
         }
         if ffmpeg_location:
             opts["ffmpeg_location"] = ffmpeg_location
-            try:
-                r = subprocess.run([ffmpeg_location, "-version"], capture_output=True, timeout=15)
-                sys.stderr.write(f"[ffmpeg-test] isfile={os.path.isfile(ffmpeg_location)} rc={r.returncode} out={r.stdout[:80]!r} err={r.stderr[:160]!r}\n")
-            except Exception as e:
-                sys.stderr.write(f"[ffmpeg-test] EXC {e!r}\n")
         _merge_args(opts, args_list)
         with YoutubeDL(opts) as ydl:
             ydl.download([url])

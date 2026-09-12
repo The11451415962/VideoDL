@@ -41,6 +41,10 @@ data class HomeUiState(
     val logs: List<String> = emptyList(),
     val finishedFile: String? = null,
     val errorMessage: String = "",
+    /** 来自设置页的「下载完成后自动打开文件」开关 */
+    val autoOpenFile: Boolean = true,
+    /** 实际写入的目录（用于如实告知用户文件到底存到哪了） */
+    val effectiveSaveDir: String = "",
 )
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -55,7 +59,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             configRepo.configFlow.collect { cfg ->
                 _state.update {
                     it.copy(proxyMode = cfg.proxyMode, format = cfg.defaultFormat,
-                           quality = cfg.defaultQuality)
+                           quality = cfg.defaultQuality, autoOpenFile = cfg.autoOpenFile,
+                           effectiveSaveDir = FileRepository.resolveBaseDir(getApplication(), cfg))
                 }
             }
         }
@@ -78,6 +83,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val config = configRepo.configFlow.first()
             val baseDir = FileRepository.resolveBaseDir(getApplication(), config)
+            // 如实反映"文件到底会存到哪"：用户选了自定义目录但没授予所有文件访问时，
+            // resolveBaseDir 会回退到默认目录，这里把真实目录暴露给界面，避免静默换地方
+            _state.update { it.copy(effectiveSaveDir = baseDir) }
             // 先用占位名构建，拿到标题后再重建
             val options = DownloadOptions(
                 url = s.url,

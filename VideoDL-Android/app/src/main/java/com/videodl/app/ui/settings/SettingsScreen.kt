@@ -3,6 +3,7 @@ package com.videodl.app.ui.settings
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -67,6 +68,14 @@ fun SettingsScreen(
                 )
             } catch (_: Exception) {}
             vm.onSaveDirChanged(it.toString())
+            // 选了但写不进去时必须当场说清楚，否则文件会静默落到 App 默认目录
+            if (!FileRepository.canWriteTreeUri(it.toString())) {
+                Toast.makeText(
+                    ctx,
+                    "该目录暂时无法直接写入，文件会先存到 App 默认目录（下方可去授权）",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 

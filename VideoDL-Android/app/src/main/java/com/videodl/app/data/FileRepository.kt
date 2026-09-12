@@ -59,13 +59,24 @@ object FileRepository {
         return File(raw).apply { mkdirs() }.absolutePath
     }
 
+    /** 用户选的 SAF 目录当前是否真的可写（内部主存储 + 已授权「所有文件访问」）。
+     *  为 false 时文件会落到 App 默认目录，界面必须如实告诉用户，不能装作写进去了。 */
+    fun canWriteTreeUri(uriStr: String): Boolean =
+        uriStr.startsWith("content://") && allFilesAccess() && resolveTreeUriToPath(uriStr) != null
+
     /** 把 SAF 树 URI(content://.../tree/primary:<路径>) 解析成真实文件路径，失败返回 null */
     private fun resolveTreeUriToPath(uriStr: String): String? {
         if (!uriStr.startsWith("content://")) return uriStr
         return try {
             val uri = android.net.Uri.parse(uriStr)
-            val docId = android.provider.DocumentsContract.getTreeDocumentId(uri)
-            val actual = docId.removePrefix("primary:").removePrefix("primary").removePrefix("/")
+            val docId = android.provider.DocumentsContract.getTreeDocumentId(uri) ?: return null
+            // 只认内部主存储。SD 卡等其它卷的卷名前缀（如 "1234-5678:"）拼到内部存储根上
+            // 会得到一个根本不存在的路径 —— 宁可返回 null 回退默认目录，也不要静默写错地方。
+            val actual = when {
+                docId.startsWith("primary:") -> docId.removePrefix("primary:")
+                docId == "primary" -> ""
+                else -> return null
+            }.trimStart('/')
             java.io.File(android.os.Environment.getExternalStorageDirectory(), actual).absolutePath
         } catch (_: Exception) {
             null

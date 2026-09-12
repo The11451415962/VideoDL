@@ -3,4 +3,7 @@
     <external-files-path name="videodl" path="VideoDL/" />
     <files-path name="internal" path="." />
     <cache-path name="cache" path="." />
+    <!-- 保存目录被改到公共目录（如 /storage/emulated/0/Download）时，
+         共享给播放器的 URI 必须落在这个根里，否则"打开文件"会直接抛异常 -->
+    <external-path name="external" path="." />
 </paths>

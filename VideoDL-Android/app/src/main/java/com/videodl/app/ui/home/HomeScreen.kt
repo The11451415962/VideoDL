@@ -69,6 +69,12 @@ fun HomeScreen(
         }
     }
 
+    // 下载完成后按设置自动打开文件（这个开关以前存了配置但没人读，等于摆设）
+    val finishedFile = state.finishedFile
+    LaunchedEffect(finishedFile) {
+        if (finishedFile != null && state.autoOpenFile) openFile(ctx, finishedFile)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -215,6 +221,19 @@ fun HomeScreen(
                     text = "❌ ${state.errorMessage}",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            // 如实显示实际保存目录：选了自定义目录但没授权时会回退到 App 目录，
+            // 不写出来用户就会"找不到文件"
+            if (state.effectiveSaveDir.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "保存到：${state.effectiveSaveDir}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
