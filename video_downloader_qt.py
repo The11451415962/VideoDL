@@ -94,18 +94,26 @@ ACCENT_PRESSED = "#155AD6"
 
 TEXT_MAIN = "#1B1F24"       # 标题
 TEXT_BODY = "#3C4753"       # 正文
-TEXT_MUTED = "#6B7684"      # 次要文字 / 字段标签
-TEXT_FAINT = "#9AA4B2"      # 占位符 / 禁用
+TEXT_MUTED = "#6B7684"      # 次要文字 / 字段标签（白卡上 4.6:1）
+TEXT_ON_MICA = "#545F6D"    # 落在磨砂底色上的次要文字（对浅色磨砂底 4.6:1）
+TEXT_FAINT = "#9AA4B2"      # 占位符
+TEXT_DISABLED = "#7D8794"   # 禁用态文字（3.5:1，旧值 2.3:1 几乎看不见）
 
 SURFACE = "#FFFFFF"         # 卡片面（Layer）
-SURFACE_ALT = "#F4F6FA"     # 输入框 / 次级面板
+SURFACE_ALT = "#F4F6FA"     # 次级面板
 SURFACE_HOVER = "#EBF0F7"
-BORDER = "#E3E7ED"
+FIELD_BG = "#FFFFFF"        # 输入控件底色（与卡片同白，靠描边区分）
+FIELD_BG_READONLY = "#F7F9FC"
+BORDER = "#E3E7ED"          # 卡片描边（浅，靠投影分层）
+BORDER_FIELD = "#D2DAE4"    # 输入控件描边（1.3:1，能看出"这是个框"）
 BORDER_STRONG = "#CFD6E0"
 PAGE_FALLBACK = "#EEF2F8"   # 磨砂不可用时的页面底色
 
-LOG_BG = "#F7F9FC"          # 日志面板底
+LOG_BG = "#EEF2F7"          # 日志面板底（比白卡深一档，看得出是一块"面"）
 LOG_TEXT = "#3C4753"
+
+PLACEHOLDER_MARK = "#5C6675"   # 封面占位图标（4.4:1）
+PLACEHOLDER_RING = "#DCE3EC"   # 封面占位圆底
 
 # 日志级别 → 颜色
 LOG_COLORS = {"info": "#5A6675", "ok": "#12794A",
@@ -230,24 +238,19 @@ def _make_link_icon() -> QIcon:
 
 
 def _make_thumb_placeholder(w: int, h: int) -> QPixmap:
-    """生成封面占位图（透明的圆角播放标记 + 中文说明），替代英文占位文本。"""
+    """生成封面占位图：一个清晰可辨的播放标记（不放说明文字，避免和状态行重复）。"""
     pm = QPixmap(w, h)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    cx, cy = w / 2.0, h / 2.0 - 8
+    cx, cy = w / 2.0, h / 2.0
     p.setPen(Qt.NoPen)
-    p.setBrush(QColor(138, 148, 162, 38))
-    p.drawEllipse(QPointF(cx, cy), 19, 19)
-    p.setBrush(QColor(TEXT_FAINT))
-    p.drawPolygon(QPolygonF([QPointF(cx - 4.5, cy - 8),
-                             QPointF(cx - 4.5, cy + 8),
-                             QPointF(cx + 9.0, cy)]))
-    f = p.font()
-    f.setPointSize(9)
-    p.setFont(f)
-    p.setPen(QPen(QColor(TEXT_FAINT)))
-    p.drawText(QRectF(0, cy + 26, w, 20), Qt.AlignHCenter | Qt.AlignTop, "等待视频信息")
+    p.setBrush(QColor(PLACEHOLDER_RING))
+    p.drawEllipse(QPointF(cx, cy), 21, 21)
+    p.setBrush(QColor(PLACEHOLDER_MARK))
+    p.drawPolygon(QPolygonF([QPointF(cx - 5.0, cy - 9),
+                             QPointF(cx - 5.0, cy + 9),
+                             QPointF(cx + 10.0, cy)]))
     p.end()
     return pm
 
@@ -278,8 +281,11 @@ def _make_app_icon() -> QIcon:
 # ============================================================
 # 卡片 / 按钮工厂
 # ============================================================
-def _add_card_shadow(widget: QWidget, blur: int = 16, alpha: int = 22) -> None:
-    """给卡片压一层极淡的投影，形成 Fluent 的 Layer 层次感。"""
+def _add_card_shadow(widget: QWidget, blur: int = 10, alpha: int = 16) -> None:
+    """给卡片压一层极淡的投影，形成 Fluent 的 Layer 层次感。
+
+    投影要足够轻：卡片之间只有 12px 间隙，投影太重会把间隙填成一条灰缝。
+    """
     eff = QGraphicsDropShadowEffect(widget)
     eff.setBlurRadius(blur)
     eff.setOffset(0, 2)
@@ -367,6 +373,9 @@ class VideoDownloaderWindow(QMainWindow):
         self._build_ui()
         self._apply_stylesheet()
 
+        # 焦点给第一步要操作的链接输入框（不是只读的路径框）
+        self.url_edit.setFocus()
+
         # 启动后检查依赖
         self._startup_check()
 
@@ -390,7 +399,7 @@ class VideoDownloaderWindow(QMainWindow):
         root.setObjectName("root")
         outer = QVBoxLayout(root)
         outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(10)
+        outer.setSpacing(12)
 
         outer.addLayout(self._build_header())
         outer.addWidget(self._build_link_card())
@@ -412,9 +421,11 @@ class VideoDownloaderWindow(QMainWindow):
     def _build_header(self):
         row = QHBoxLayout()
         row.setSpacing(8)
+        # 页头与第一张卡之间留 16px（比卡片之间的 12px 大），让"换组"读得出来
+        row.setContentsMargins(0, 0, 0, 4)
 
         box = QVBoxLayout()
-        box.setSpacing(1)
+        box.setSpacing(2)
         title = QLabel("视频下载器")
         title.setObjectName("appTitle")
         sub = QLabel("yt-dlp 驱动 · 支持 YouTube / B站 / 抖音 等站点")
@@ -427,14 +438,14 @@ class VideoDownloaderWindow(QMainWindow):
         # 低频操作收到标题行右上角，把主视觉让给下载按钮
         self.btn_update = _make_button("更新核心", "ghost", 32, on_click=self._update_core)
         self.btn_settings = _make_button("设置", "ghost", 32, on_click=self._open_settings)
-        row.addWidget(self.btn_update, 0, Qt.AlignBottom)
-        row.addWidget(self.btn_settings, 0, Qt.AlignBottom)
+        row.addWidget(self.btn_update, 0, Qt.AlignVCenter)
+        row.addWidget(self.btn_settings, 0, Qt.AlignVCenter)
         return row
 
     def _build_link_card(self):
         card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(8)
 
         row = QHBoxLayout()
@@ -457,7 +468,7 @@ class VideoDownloaderWindow(QMainWindow):
     def _build_config_card(self):
         card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(10)
 
         # 保存路径
@@ -469,6 +480,9 @@ class VideoDownloaderWindow(QMainWindow):
         self.path_edit.setReadOnly(True)
         self.path_edit.setFixedHeight(36)
         self.path_edit.setToolTip(self.config["save_dir"])
+        # 只读展示用：不参与焦点，否则启动时它会抢焦点并全选，
+        # 出现一个全页最刺眼的蓝框 + 蓝底白字选中块（看起来像卡住了）
+        self.path_edit.setFocusPolicy(Qt.NoFocus)
         path_row.addWidget(self.path_edit, 1)
 
         self.btn_change_path = _make_button("更改路径", "secondary", 36, 92,
@@ -538,35 +552,36 @@ class VideoDownloaderWindow(QMainWindow):
     def _build_preview_card(self):
         card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(10)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(8)
 
         top = QHBoxLayout()
-        top.setSpacing(14)
+        top.setSpacing(16)
 
-        # 缩略图（16:9，圆角；无信息时显示占位图而不是英文占位文本）
+        # 缩略图（16:9，圆角；无信息时显示占位标记而不是英文占位文本）
         self.thumb = QLabel()
         self.thumb.setObjectName("thumb")
         self.thumb.setAlignment(Qt.AlignCenter)
-        self.thumb.setFixedSize(208, 117)
-        self.thumb.setPixmap(_make_thumb_placeholder(206, 115))
+        self.thumb.setFixedSize(192, 108)
+        self.thumb.setPixmap(_make_thumb_placeholder(190, 106))
         top.addWidget(self.thumb)
 
-        # 右侧信息：标题 / 时长 / 大小 / 附加信息
+        # 右侧信息：标题 / 时长 / 大小 / 附加信息（整块与缩略图垂直居中）
         info = QVBoxLayout()
         info.setSpacing(4)
-        info.setContentsMargins(0, 2, 0, 2)
-        self.info_title = QLabel("等待粘贴链接…")
+        info.setContentsMargins(0, 0, 0, 0)
+        info.addStretch(1)
+        self.info_title = QLabel("未选择视频")
         self.info_title.setObjectName("infoTitle")
         self.info_title.setWordWrap(True)
         info.addWidget(self.info_title)
 
-        self.info_meta = QLabel("时长：—")
+        self.info_meta = QLabel("时长 -")
         self.info_meta.setObjectName("infoMeta")
         info.addWidget(self.info_meta)
 
-        self.info_size = QLabel("预计大小：—")
-        self.info_size.setObjectName("infoMeta")
+        self.info_size = QLabel("预计大小 -")
+        self.info_size.setObjectName("infoSize")
         info.addWidget(self.info_size)
 
         self.info_extra = QLabel("")
@@ -577,9 +592,9 @@ class VideoDownloaderWindow(QMainWindow):
         top.addLayout(info, 1)
         lay.addLayout(top)
 
-        # 进度条 + 右侧百分比（固定宽度，避免数字变化时左右抖动）
+        # 进度条 + 右侧百分比（固定窄槽位，避免数字变化抖动、也避免留下大空档）
         prog_row = QHBoxLayout()
-        prog_row.setSpacing(10)
+        prog_row.setSpacing(12)
         self.progress = QProgressBar()
         self.progress.setObjectName("progress")
         self.progress.setRange(0, 100)
@@ -589,7 +604,7 @@ class VideoDownloaderWindow(QMainWindow):
         prog_row.addWidget(self.progress, 1)
         self.percent_label = QLabel("0.0%")
         self.percent_label.setObjectName("percentText")
-        self.percent_label.setFixedWidth(54)
+        self.percent_label.setFixedWidth(42)
         self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         prog_row.addWidget(self.percent_label)
         lay.addLayout(prog_row)
@@ -603,19 +618,21 @@ class VideoDownloaderWindow(QMainWindow):
     def _build_buttons(self):
         row = QHBoxLayout()
         row.setSpacing(8)
+        # 与卡片内容列左对齐（卡片外边界 16 + 卡片内边距 16）
+        row.setContentsMargins(16, 0, 16, 0)
 
-        self.btn_download = _make_button("开始下载", "primary", 36, 112,
+        self.btn_download = _make_button("开始下载", "primary", 36, 100,
                                          self._start_download)
         row.addWidget(self.btn_download)
 
-        self.btn_stop = _make_button("停止下载", "secondary", 36, 96,
+        self.btn_stop = _make_button("停止下载", "secondary", 36, 100,
                                      self._stop_download)
         self.btn_stop.setEnabled(False)
         row.addWidget(self.btn_stop)
 
         row.addStretch(1)
 
-        self.btn_open = _make_button("打开目录", "secondary", 36, 92,
+        self.btn_open = _make_button("打开目录", "secondary", 36, 88,
                                      self._open_today_folder)
         row.addWidget(self.btn_open)
         return row
@@ -623,17 +640,17 @@ class VideoDownloaderWindow(QMainWindow):
     def _build_log_card(self):
         card = _make_card()
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 12)
+        lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(8)
 
         head = QHBoxLayout()
         head.setSpacing(8)
-        head.setContentsMargins(2, 0, 0, 0)
+        head.setContentsMargins(0, 0, 0, 0)
         head_title = QLabel("下载日志")
         head_title.setObjectName("cardTitle")
         head.addWidget(head_title)
         head.addStretch(1)
-        self.btn_clear_log = _make_button("清空", "ghost", 24, 48, self._clear_log)
+        self.btn_clear_log = _make_button("清空", "ghost", 24, 40, self._clear_log)
         head.addWidget(self.btn_clear_log)
         lay.addLayout(head)
 
@@ -662,7 +679,7 @@ class VideoDownloaderWindow(QMainWindow):
 
             QLabel {{ color: {TEXT_BODY}; background: transparent; }}
             #appTitle {{ font-size: 20px; font-weight: 600; color: {TEXT_MAIN}; }}
-            #appSubtitle {{ font-size: 12px; color: {TEXT_MUTED}; }}
+            #appSubtitle {{ font-size: 12px; color: {TEXT_ON_MICA}; }}
 
             #card {{
                 background-color: {SURFACE};
@@ -680,10 +697,10 @@ class VideoDownloaderWindow(QMainWindow):
                 border-radius: 4px;
             }}
 
-            /* ---- 输入框 / 下拉框（同高度、同圆角） ---- */
+            /* ---- 输入框 / 下拉框（同高度、同圆角；白底 + 看得见的描边） ---- */
             QLineEdit, QComboBox {{
-                background-color: {SURFACE_ALT};
-                border: 1px solid {BORDER};
+                background-color: {FIELD_BG};
+                border: 1px solid {BORDER_FIELD};
                 border-radius: 6px;
                 padding: 0 10px;
                 color: {TEXT_MAIN};
@@ -691,16 +708,26 @@ class VideoDownloaderWindow(QMainWindow):
                 selection-background-color: {ACCENT};
                 selection-color: #ffffff;
             }}
-            QLineEdit:hover, QComboBox:hover {{ background-color: {SURFACE_HOVER}; }}
+            QLineEdit:hover, QComboBox:hover {{
+                background-color: {SURFACE_ALT};
+                border: 1px solid #BFC9D6;
+            }}
             QLineEdit:focus, QComboBox:focus {{
-                background-color: {SURFACE};
+                background-color: {FIELD_BG};
                 border: 1px solid {ACCENT};
             }}
-            QLineEdit[readOnly="true"] {{ background-color: {LOG_BG}; color: {TEXT_MUTED}; }}
-            QLineEdit[readOnly="true"]:hover {{ background-color: {LOG_BG}; }}
+            QLineEdit[readOnly="true"] {{
+                background-color: {FIELD_BG_READONLY};
+                border: 1px solid {BORDER};
+                color: {TEXT_MUTED};
+            }}
+            QLineEdit[readOnly="true"]:hover {{
+                background-color: {FIELD_BG_READONLY};
+                border: 1px solid {BORDER};
+            }}
             QLineEdit:disabled, QComboBox:disabled {{
-                color: {TEXT_FAINT};
-                background-color: {LOG_BG};
+                color: {TEXT_DISABLED};
+                background-color: {FIELD_BG_READONLY};
                 border: 1px solid {BORDER};
             }}
 
@@ -731,9 +758,9 @@ class VideoDownloaderWindow(QMainWindow):
             QPushButton:hover {{ background-color: {SURFACE_ALT}; }}
             QPushButton:pressed {{ background-color: {SURFACE_HOVER}; }}
             QPushButton:disabled {{
-                color: {TEXT_FAINT};
+                color: {TEXT_DISABLED};
                 border: 1px solid {BORDER};
-                background-color: {LOG_BG};
+                background-color: {SURFACE_ALT};
             }}
 
             QPushButton#primary {{
@@ -751,17 +778,17 @@ class VideoDownloaderWindow(QMainWindow):
             QPushButton#ghost {{
                 background: transparent;
                 border: 1px solid transparent;
-                color: {TEXT_BODY};
-                padding: 0 10px;
+                color: {TEXT_ON_MICA};
+                padding: 0 6px;
                 font-weight: 500;
             }}
             QPushButton#ghost:hover {{ background-color: {SURFACE_HOVER}; }}
             QPushButton#ghost:pressed {{ background-color: #DDE5F0; }}
-            QPushButton#ghost:disabled {{ color: {TEXT_FAINT}; background: transparent; }}
+            QPushButton#ghost:disabled {{ color: {TEXT_DISABLED}; background: transparent; }}
 
             /* ---- 进度条 ---- */
             QProgressBar {{
-                background-color: #E9EDF3;
+                background-color: #DFE5EC;
                 border: none;
                 border-radius: 3px;
             }}
@@ -780,14 +807,15 @@ class VideoDownloaderWindow(QMainWindow):
             /* ---- 预览信息 ---- */
             #infoTitle {{ font-size: 15px; font-weight: 600; color: {TEXT_MAIN}; }}
             #infoMeta {{ font-size: 12px; color: {TEXT_MUTED}; }}
+            #infoSize {{ font-size: 12px; color: {TEXT_MUTED}; }}
             #statusText {{ font-size: 12px; color: {TEXT_BODY}; }}
-            #percentText {{ font-size: 13px; font-weight: 600; color: {TEXT_MAIN}; }}
+            #percentText {{ font-size: 12px; font-weight: 600; color: {TEXT_BODY}; }}
 
             /* ---- 日志 ---- */
             #logEdit {{
                 background-color: {LOG_BG};
                 color: {LOG_TEXT};
-                border: 1px solid #E9EDF3;
+                border: 1px solid {BORDER};
                 border-radius: 6px;
                 padding: 6px 8px;
                 font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
@@ -795,7 +823,7 @@ class VideoDownloaderWindow(QMainWindow):
                 selection-background-color: {ACCENT};
                 selection-color: #ffffff;
             }}
-            #logEdit:focus {{ border: 1px solid {BORDER_STRONG}; }}
+            #logEdit:focus {{ border: 1px solid {BORDER_FIELD}; }}
 
             QScrollBar:vertical {{
                 background: transparent; width: 10px; margin: 2px;
@@ -938,7 +966,7 @@ class VideoDownloaderWindow(QMainWindow):
         self.info_meta.setText("时长：—")
         self.info_size.setText("预计大小：—")
         self.info_extra.setText("")
-        self.thumb.setPixmap(_make_thumb_placeholder(206, 115))
+        self.thumb.setPixmap(_make_thumb_placeholder(190, 106))
 
         self._dl = core.Downloader(
             url=url, output_path=output_path, config=self.config,
@@ -961,7 +989,7 @@ class VideoDownloaderWindow(QMainWindow):
 
         self.info_title.setText(title)
         self.info_meta.setText(
-            f"时长 {self._fmt_duration(duration)}   ·   {resolution}   ·   {platform}")
+            f"时长 {self._fmt_duration(duration)}  ·  {resolution}  ·  {platform}")
         self.info_size.setText(f"预计大小 {self._fmt_size(size)}")
         self.info_extra.setText(f"上传者：{uploader}")
         if self._dl is not None:
