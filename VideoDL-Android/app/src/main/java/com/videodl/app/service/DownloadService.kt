@@ -54,6 +54,16 @@ internal fun progressText(percent: Float, speed: String, eta: String, queued: In
         if (queued > 0) append("  ·  队列 $queued")
     }
 
+/** 时长文字（卡片左下显示用），例如 "4:12"；未知返回空串 */
+internal fun formatDurationText(seconds: Int): String {
+    if (seconds <= 0) return ""
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return if (h > 0) "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+    else "$m:${s.toString().padStart(2, '0')}"
+}
+
 /**
  * 下载跑在前台 Service 里 —— 这是手机端必须的做法：
  * 用户切走 App、锁屏，下载都继续，通知栏实时显示进度和速度。
@@ -81,6 +91,8 @@ class DownloadService : Service() {
     private var currentTitle = ""
     private var currentThumb = ""
     private var currentFormatLabel = ""
+    private var currentDuration = ""
+    private var currentUploader = ""
 
     companion object {
         private const val TAG = "VideoDL"
@@ -297,8 +309,15 @@ class DownloadService : Service() {
         }
         currentTitle = info?.title.orEmpty()
         currentThumb = info?.thumbnail.orEmpty()
-        // 展示用的标签要干净：不要把 yt-dlp 的选择器原文漏到界面上
-        currentFormatLabel = listOf(quality.ifBlank { "best" }, format)
+        currentUploader = info?.uploader.orEmpty()
+        currentDuration = formatDurationText(info?.duration ?: 0)
+        // 展示用的标签要干净：不要把 yt-dlp 的术语/选择器原文漏到界面上
+        val qualityLabel = when (quality.ifBlank { "best" }) {
+            "best" -> "最佳"
+            "audio" -> "仅音频"
+            else -> quality
+        }
+        currentFormatLabel = listOf(qualityLabel, format)
             .filter { it.isNotBlank() }
             .joinToString(" · ")
 
@@ -387,6 +406,8 @@ class DownloadService : Service() {
                     sizeText = sizeText,
                     status = status,
                     timeMs = System.currentTimeMillis(),
+                    durationText = currentDuration,
+                    uploader = currentUploader,
                 ),
             )
         }.onFailure { Log.w(TAG, "save record failed: ${it.message}") }

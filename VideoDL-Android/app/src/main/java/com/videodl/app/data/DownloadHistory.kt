@@ -15,6 +15,10 @@ data class DownloadRecord(
     val sizeText: String,     // 例如 "31.1 MB"
     val status: String,       // done | error | cancelled
     val timeMs: Long,
+    /** 时长文字（卡片左下，对标 YTDLnis 的卡片信息排布） */
+    val durationText: String = "",
+    /** 上传者（卡片第二行） */
+    val uploader: String = "",
 )
 
 /**
@@ -50,6 +54,8 @@ object DownloadHistory {
                 put("size", r.sizeText)
                 put("status", r.status)
                 put("time", r.timeMs)
+                put("dur", r.durationText)
+                put("up", r.uploader)
             })
         }
         return arr.toString()
@@ -69,6 +75,8 @@ object DownloadHistory {
                 sizeText = o.optString("size"),
                 status = o.optString("status", "done"),
                 timeMs = o.optLong("time", 0L),
+                durationText = o.optString("dur"),
+                uploader = o.optString("up"),
             )
         }
     } catch (e: Exception) {

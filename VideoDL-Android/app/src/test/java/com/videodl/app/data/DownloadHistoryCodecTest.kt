@@ -15,10 +15,12 @@ class DownloadHistoryCodecTest {
         title = title,
         uri = "content://media/external/video/media/51",
         thumb = "https://example.com/t.jpg",
-        formatLabel = "1080p · mp4 · 30080+30280",
+        formatLabel = "1080p · mp4",
         sizeText = "31.1 MB",
         status = "done",
         timeMs = 1_700_000_000_000L,
+        durationText = "4:12",
+        uploader = "西维西师傅",
     )
 
     @Test fun roundTrip_keepsAllFields() {

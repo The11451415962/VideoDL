@@ -24,11 +24,11 @@ import com.videodl.app.ui.home.HomeScreen
 import com.videodl.app.ui.home.HomeViewModel
 import com.videodl.app.ui.settings.SettingsScreen
 
-/** 底部导航的三个标签页（对齐 YTDLnis 的多标签结构，队列并入"下载"） */
+/** 底部导航的三个标签页（对标 YTDLnis：首页 / 下载 / 更多） */
 enum class AppTab(val label: String, val icon: ImageVector) {
     Home("首页", Icons.Filled.Home),
     Downloads("下载", Icons.AutoMirrored.Filled.List),
-    Settings("设置", Icons.Filled.Settings),
+    Settings("更多", Icons.Filled.Settings),
 }
 
 @Composable
