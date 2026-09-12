@@ -83,11 +83,37 @@ python video_downloader.py        # 经典 tkinter 版
 - **默认存进系统相册**：发布到 `Movies/VideoDL`，可直接在相册或剪映里打开（不需要 `MANAGE_EXTERNAL_STORAGE`）
 - **分享直达**：从其他 App 分享链接过来会**直接开始下载**，不依赖主界面是否活着
 - **下载队列**：一次跑一个，其余排队，上限 5 个；「停止」清空队列
-- **编码兜底**：下载后用 ffprobe 探真实编码，不是 h264+aac 就用 ffmpeg 转码，分辨率限制在 1080P 以内
+- **编码兜底（⚠️ 当前在安卓上不生效，见下）**：下载后用 ffprobe 探真实编码，不是 h264+aac 就走 ffmpeg 转码，分辨率限制在 1080P 以内
 - **代理**：VPN 优先直连；`auto` 模式下地址可达才走代理（`127.0.0.1` 视为合法地址，适配 Clash / v2rayNG 本机端口），连不上就回退直连并在日志说明
 - **下载记录**：`filesDir/downloads.json`，损坏时降级为空；记录标题/uri/缩略图/格式/体积/状态/时间/时长/作者
 
 v1 明确不做：播放列表、定时下载、多选、浏览器 Cookie 导入、字幕、终端页。
+
+### ⚠️ 已知问题：安卓端的「编码兜底」转码实际跑不通
+
+打包进 APK 的 `libffmpeg.so` 是按 `--disable-gpl --disable-nonfree --enable-version3`
+构建的 **LGPL-3.0** 精简包，而且 `--disable-everything` 之后**只开了一个编码器**：
+
+```
+--disable-everything ... --enable-encoder=mjpeg
+```
+
+**没有 h264 编码器，也没有 aac 编码器。** 而 `app/src/main/python/ytdlp_bridge.py`
+里请求的是 `-c:v libx264` 和 `-c:a aac`，所以在安卓上两次尝试必然都失败，
+最后走「已保留原文件」那条路。
+
+实际后果：格式选择仍然会优先挑 H.264（这条是好的、有效的），
+但**当某一清晰度只提供 HEVC/AV1 时，App 无法把它转成 H.264** ——
+拿到手的就是相册/剪映可能打不开的文件。合并音视频流不受影响（那是 `-c copy`，不需要编码器）。
+
+原因和修法是绑在一起的：**libx264 是 GPL**，所以任何「能商用」的 ffmpeg 构建里都不会有它。
+要让转码真的可用，需要重建 `libffmpeg.so`，二选一：
+
+- 加 `--enable-libopenh264`（BSD 许可）做软件 H.264 编码，或
+- 加 `--enable-jni --enable-mediacodec --enable-encoder=h264_mediacodec`（Apache-2.0，
+  **用手机硬件编码，比 x264 快得多**），另加原生 `aac` 编码器
+
+> 这个结论来自对 `libffmpeg.so` 里 configure 行的静态分析，尚未在真机上确认。
 
 ### 构建与安装
 
@@ -202,7 +228,10 @@ A: 多半是网络。把代理模式设成 `proxy` 并填对地址（Clash 默�
 A: Cookie 模式切到 `browser` 选浏览器（先在浏览器里登录），或用 `file` 模式导入 cookies.txt。Chrome 的加密 Cookie 可以用 `export_cookies.py` 导出。
 
 **Q: 下下来的视频剪映打不开 / 相册不认**
-A: 这就是「优先 H.264 + AAC」和「兼容性转码兜底」要解决的问题。如果仍然不行，在格式弹窗里手动挑标着 H.264 的那一行。
+A: 第一步是**在格式弹窗里手动挑标着 H.264 的那一行**，这是目前唯一可靠的办法。
+「优先 H.264 + AAC」这个排序是有效的；但**安卓端的自动转码兜底目前不生效**
+（打包的 ffmpeg 没有 h264/aac 编码器，见上面「已知问题」）。桌面端用的是系统
+ffmpeg，转码是正常的。
 
 **Q: B 站下载 SSL 失败**
 A: 已知在某些网络环境（含本机）会对 B 站 CDN 报 SSL 错误，绕过本工具直接用 yt-dlp 也一样，属于环境问题。

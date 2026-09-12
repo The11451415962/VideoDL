@@ -293,6 +293,21 @@ def _ensure_importable(path, ffmpeg_location, duration=0):
     打包的精简 ffmpeg 未必支持全部选项（实测它连 crf 选项都没有），
     所以先试完整参数，失败再降级重试一次。
 
+    ⚠️ 已知问题：**在安卓上这个函数目前必然走到最后那条失败分支。**
+    打包的 libffmpeg.so 是按 `--disable-gpl --enable-version3 --disable-everything`
+    构建的 LGPL 精简包，**只开了 `--enable-encoder=mjpeg` 一个编码器** ——
+    没有 libx264、没有 h264、也没有 aac。而下面 _run_transcode 请求的正是
+    `-c:v libx264` / `-c:a aac`，ffmpeg 会直接报 "Unknown encoder"，
+    两次尝试都失败，于是保留原文件。
+
+    这不是忘了接线，是许可证约束的必然结果：libx264 是 GPL，所以任何能闭源
+    商用的 ffmpeg 构建都不含它。要让转码真的可用，得重建 libffmpeg.so，
+    改用 `--enable-libopenh264`（BSD）或
+    `--enable-jni --enable-mediacodec --enable-encoder=h264_mediacodec`（Apache-2.0，
+    手机硬件编码，更快），另加原生 aac 编码器。详见 README「已知问题」。
+
+    （合并音视频流不受影响：那条路走 -c copy，不需要编码器。）
+
     返回 (ok, reason)；reason == "cancelled" 表示用户中断。
     """
     global _cancel_flag

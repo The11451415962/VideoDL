@@ -81,6 +81,31 @@ review verdict 应为 ⚠️ unverified-runtime（环境限制），不要当它
 Python 桥。开着混淆又没写 keep 规则的结果是"装得上但一跑就崩"，而当前没有真机可验 release。
 等 release 在真机跑通之后再开混淆并补规则。
 
+## 已知功能缺陷（比"遗留小项"严重，优先修）
+
+**安卓端「编码兜底」转码是死代码 —— `_ensure_importable()` 在安卓上必然失败。**
+
+打包的 `libffmpeg.so` 是 LGPL-3.0 精简构建：
+
+```
+--disable-gpl --disable-nonfree --enable-version3
+--disable-everything ... --enable-encoder=mjpeg
+```
+
+**只开了一个 `mjpeg` 编码器**，没有 h264、没有 aac。而 `ytdlp_bridge.py` 请求的是
+`-c:v libx264` / `-c:a aac` → ffmpeg 直接报 "Unknown encoder"，两次降级都失败 →
+保留原文件。
+
+- 影响面：格式只提供 HEVC/AV1 时无法转成 H.264，相册/剪映可能打不开
+  —— 正是这个功能本来要解决的场景
+- 不受影响：合并音视频流走 `-c copy`，不需要编码器，日常下载正常
+- 根因不是漏接线，是许可证约束：libx264 是 GPL，能闭源商用的 ffmpeg 构建不含它
+- 修法：重建 `libffmpeg.so`，用 `--enable-libopenh264`（BSD）或
+  `--enable-jni --enable-mediacodec --enable-encoder=h264_mediacodec`（Apache-2.0）+ 原生 aac
+- **待确认**：静态分析结论，还没在真机上跑 `ffmpeg -encoders` 核实
+- 旧的文档说法（"`libffmpeg.so` 含 libx264"）**是错的**，已在 README 和交接文档改正。
+  很可能是把桌面端系统 ffmpeg 8.1.1（Gyan 完整版，确实有 libx264）误当成了安卓端这份
+
 ## 遗留小项（carry to final review）
 
 - T1: `app/build.gradle.kts` 里空的 `productFlavors { create("main") }` 是死配置 —— 要么删，要么写清用途
