@@ -147,6 +147,7 @@ def list_formats(url, args_list):
                 "ext": f.get("ext") or "",
                 "vcodec": vcodec,
                 "acodec": acodec,
+                "width": f.get("width") or 0,
                 "height": f.get("height") or 0,
                 "fps": f.get("fps") or 0,
                 "filesize": f.get("filesize") or f.get("filesize_approx") or 0,

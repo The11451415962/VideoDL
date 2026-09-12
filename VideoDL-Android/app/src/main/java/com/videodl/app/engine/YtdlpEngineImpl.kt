@@ -168,11 +168,18 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         for (i in 0 until arr.length()) {
             val f = arr.optJSONObject(i) ?: continue
             val height = f.optInt("height", 0)
+            val width = f.optInt("width", 0)
             val id = f.optString("id")
             val audioOnly = f.optBoolean("audio_only", false)
+            // 竖屏视频（如 1080×1920）要按短边叫法显示，否则会写成 "1920p" 让人误判画质
+            val shortSide = when {
+                width > 0 && height > 0 -> minOf(width, height)
+                height > 0 -> height
+                else -> 0
+            }
             out += FormatOption(
                 id = id,
-                label = if (audioOnly) "仅音频" else if (height > 0) "${height}p" else id,
+                label = if (audioOnly) "仅音频" else if (shortSide > 0) "${shortSide}p" else id,
                 note = f.optString("note"),
                 ext = f.optString("ext"),
                 vcodec = f.optString("vcodec"),
@@ -183,6 +190,7 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
                 tbr = f.optDouble("tbr", 0.0),
                 abr = f.optDouble("abr", 0.0),
                 audioOnly = audioOnly,
+                width = width,
             )
         }
         Log.d(TAG, "fetchDetail -> ${out.size} 个格式")

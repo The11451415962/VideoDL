@@ -29,13 +29,17 @@ import com.videodl.app.engine.FormatOption
 internal fun splitFormats(formats: List<FormatOption>): Pair<List<FormatOption>, List<FormatOption>> {
     val useful = formats.filter { it.id.isNotBlank() && (it.vcodec != "none" || it.acodec != "none") }
     val video = useful.filterNot { it.audioOnly }
-        .sortedWith(compareByDescending<FormatOption> { it.height }
-            .thenByDescending { it.fps }
-            .thenByDescending { it.tbr })
+        .sortedWith(
+            compareByDescending<FormatOption> { it.height }
+                // 同一清晰度优先 H.264 —— 剪映/相册才认
+                .thenByDescending { it.editorFriendly }
+                .thenByDescending { it.fps }
+                .thenByDescending { it.tbr },
+        )
         .distinctBy { "${it.height}-${it.ext}-${it.vcodec.substringBefore('.')}" }
         .take(30)
     val audio = useful.filter { it.audioOnly }
-        .sortedByDescending { it.abr }
+        .sortedWith(compareByDescending<FormatOption> { it.editorFriendly }.thenByDescending { it.abr })
         .take(10)
     return video to audio
 }
@@ -119,13 +123,22 @@ private fun FormatRow(fmt: FormatOption, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = listOf(fmt.codecText, fmt.ext, fmt.id)
+                    text = listOf(fmt.codecText, fmt.resolutionText, fmt.ext, fmt.id)
                         .filter { it.isNotBlank() }.joinToString("  ·  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // HEVC/AV1 装进 mp4 也常被剪映拒；这里提前讲清楚，别让用户白下
+                if (!fmt.editorFriendly) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "剪映/相册可能不支持此编码",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             Spacer(Modifier.width(12.dp))
             Column(horizontalAlignment = Alignment.End) {

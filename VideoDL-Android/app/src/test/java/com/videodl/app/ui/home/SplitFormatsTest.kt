@@ -65,6 +65,23 @@ class SplitFormatsTest {
         assertTrue(audio.isEmpty())
     }
 
+    @Test fun sameHeight_prefersH264First() {
+        // 弹窗第一行应该是 H.264 —— 用户随便点第一个也大概率拿到剪映能用的格式
+        val (video, _) = splitFormats(sample)
+        val top = video.first()
+        assertEquals("avc1", top.vcodec.substringBefore('.'))
+        assertEquals(1080, top.height)
+    }
+
+    @Test fun audio_prefersAacFirst() {
+        val mixed = listOf(
+            fmt("30280", 0, "none", "mp4a", "m4a", audioOnly = true),
+            fmt("30250", 0, "none", "opus", "webm", audioOnly = true),
+        )
+        val (_, audio) = splitFormats(mixed)
+        assertEquals("30280", audio.first().id)
+    }
+
     @Test fun emptyInput_returnsEmptyGroups() {
         val (video, audio) = splitFormats(emptyList())
         assertTrue(video.isEmpty())

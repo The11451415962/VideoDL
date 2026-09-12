@@ -250,7 +250,8 @@ fun HomeScreen(
             onDismiss = { sheetVisible = false },
             onPick = { fmt ->
                 sheetVisible = false
-                vm.startDownload(selector = fmt.id)
+                // 用 downloadSelector：纯视频流会自动拼音频，否则下出来没声音
+                vm.startDownload(selector = fmt.downloadSelector)
             },
         )
     }

@@ -50,8 +50,19 @@ import android.util.Log
 class DownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var job: Job? = null
     private var lastNotify = 0L
+
+    /** 当前正在跑的任务 + 排队等待的任务（一次只跑一个，但不丢请求） */
+    private data class PendingJob(
+        val url: String,
+        val format: String,
+        val quality: String,
+        val proxyMode: String,
+        val selector: String,
+    )
+
+    private var runningJob: Job? = null
+    private val queue = ArrayDeque<PendingJob>()
 
     /** 当前这一次下载的展示信息，成功后写进下载记录 */
     private var currentTitle = ""
@@ -62,6 +73,9 @@ class DownloadService : Service() {
         private const val TAG = "VideoDL"
         private const val CHANNEL_ID = "download"
         private const val NOTIF_ID = 1001
+        /** 完成/失败的通知另用一个 id，免得被下一个任务的进度通知顶掉 */
+        private const val NOTIF_ID_RESULT = 1002
+        private const val MAX_QUEUE = 5
 
         const val ACTION_START = "com.videodl.app.START"
         const val ACTION_CANCEL = "com.videodl.app.CANCEL"
@@ -115,25 +129,68 @@ class DownloadService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                val pending = PendingJob(
+                    url = url,
+                    format = intent.getStringExtra(EXTRA_FORMAT).orEmpty(),
+                    quality = intent.getStringExtra(EXTRA_QUALITY).orEmpty(),
+                    proxyMode = intent.getStringExtra(EXTRA_PROXY).orEmpty(),
+                    selector = intent.getStringExtra(EXTRA_SELECTOR).orEmpty(),
+                )
                 goForeground(getString(R.string.notif_downloading_title), "准备下载…", 0, false)
-                job?.cancel()
-                job = scope.launch {
-                    runDownload(
-                        url,
-                        intent.getStringExtra(EXTRA_FORMAT).orEmpty(),
-                        intent.getStringExtra(EXTRA_QUALITY).orEmpty(),
-                        intent.getStringExtra(EXTRA_PROXY).orEmpty(),
-                        intent.getStringExtra(EXTRA_SELECTOR).orEmpty(),
-                    )
+                if (runningJob != null) {
+                    // 已经有一个在下了：排队，而不是把前一个悄悄取消掉
+                    if (queue.size >= MAX_QUEUE) {
+                        DownloadCenter.log("[提示] 队列已满（$MAX_QUEUE 个），本次未加入")
+                    } else {
+                        queue.addLast(pending)
+                        DownloadCenter.log("[提示] 已加入队列：排在 ${queue.size} 个之后")
+                    }
+                } else {
+                    startJob(pending)
                 }
             }
             ACTION_CANCEL -> {
+                // "停止"是用户意图明确的操作：取消当前这个，并清掉队列里等着的一起停
                 (application as MainApplication).engine.cancel()
-                DownloadCenter.log("[提示] 已请求取消下载")
+                if (queue.isNotEmpty()) {
+                    DownloadCenter.log("[提示] 已清空队列（${queue.size} 个）")
+                    queue.clear()
+                }
+                DownloadCenter.log("[提示] 已请求取消当前下载")
             }
-            else -> stopSelf()
+            else -> if (runningJob == null && queue.isEmpty()) stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private fun startJob(pending: PendingJob) {
+        runningJob = scope.launch {
+            try {
+                runDownload(
+                    pending.url, pending.format, pending.quality,
+                    pending.proxyMode, pending.selector,
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "job failed", e)
+                finishWithError(e.message ?: "未知错误")
+            } finally {
+                runningJob = null
+                dispatchNext()
+            }
+        }
+    }
+
+    /** 当前任务结束后：还有排队就接着下，没有就收工（关掉前台通知） */
+    private fun dispatchNext() {
+        val next = queue.removeFirstOrNull()
+        if (next != null) {
+            DownloadCenter.log("[提示] 开始队列中的下一个（还剩 ${queue.size} 个）")
+            goForeground(getString(R.string.notif_downloading_title), "准备下载…", 0, false)
+            startJob(next)
+        } else {
+            stopForegroundCompat(true)
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
@@ -194,12 +251,10 @@ class DownloadService : Service() {
         }
         currentTitle = info?.title.orEmpty()
         currentThumb = info?.thumbnail.orEmpty()
-        currentFormatLabel = buildString {
-            append(quality.ifBlank { "best" })
-            append(" · ")
-            append(format)
-            if (selectorArg.isNotBlank()) append(" · ").append(selectorArg)
-        }
+        // 展示用的标签要干净：不要把 yt-dlp 的选择器原文漏到界面上
+        currentFormatLabel = listOf(quality.ifBlank { "best" }, format)
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
 
         val finalOptions = info?.title?.takeIf { it.isNotBlank() }?.let { title ->
             options.copy(
@@ -315,9 +370,9 @@ class DownloadService : Service() {
             .setAutoCancel(true)
             .setOngoing(false)
             .build()
-        safeNotify(notif)
-        stopForegroundCompat(false)
-        stopSelf()
+        // 用独立 id：队列里下一个任务的进度通知不会把它顶掉
+        safeNotify(notif, NOTIF_ID_RESULT)
+        // 不在这里停服务：还有排队任务就接着下（见 dispatchNext）
     }
 
     /**
@@ -355,9 +410,8 @@ class DownloadService : Service() {
             .setAutoCancel(true)
             .setOngoing(false)
             .build()
-        safeNotify(notif)
-        stopForegroundCompat(false)
-        stopSelf()
+        safeNotify(notif, NOTIF_ID_RESULT)
+        // 同样不在这里停服务：队列里还有就继续
     }
 
     /** 完成后点通知即可播放：相册文件用 content://，未开相册时用 FileProvider 共享 */
@@ -456,9 +510,9 @@ class DownloadService : Service() {
         ))
     }
 
-    private fun safeNotify(notif: Notification) {
+    private fun safeNotify(notif: Notification, id: Int = NOTIF_ID) {
         runCatching {
-            NotificationManagerCompat.from(this).notify(NOTIF_ID, notif)
+            NotificationManagerCompat.from(this).notify(id, notif)
         }.onFailure { Log.w(TAG, "notify failed: ${it.message}") }
     }
 

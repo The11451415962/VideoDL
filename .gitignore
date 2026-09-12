@@ -40,3 +40,8 @@ tools/ffmpeg.exe
 
 # 鏃ュ織
 *.log
+
+# 下载出来的测试视频不要入库
+*.mp4
+*.webm
+*.mkv

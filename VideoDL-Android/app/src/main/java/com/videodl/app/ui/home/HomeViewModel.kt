@@ -144,15 +144,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (url.isBlank() || s.busy) return
         DownloadCenter.reset()
         val format = formatOverride.ifBlank {
-            if (selector.isNotBlank() && selector.contains("audio")) "mp3" else "mp4"
+            if (selector.isNotBlank() && selector.startsWith("bestaudio")) "mp3" else "mp4"
         }
+        // 画质标签用"短边"叫法（竖屏 1080×1920 显示为 1080p）
+        val picked = s.formats.firstOrNull { fmt -> selector.isNotBlank() && selector.contains(fmt.id) }
         DownloadService.start(
             ctx = appCtx,
             url = url,
             format = format,
-            quality = selection.value.formats.firstOrNull { it.id == selector }?.let { fmt ->
-                if (fmt.height > 0) "${fmt.height}p" else "best"
-            } ?: "best",
+            quality = picked?.qualityLabel ?: "best",
             proxyMode = "",
             selector = selector,
         )
