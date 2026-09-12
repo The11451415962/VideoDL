@@ -38,14 +38,40 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         }
     }
 
-    /** 解析要用的 Cookie 文件：优先配置的 file 路径，其次 App 目录下自动检测的 cookies.txt */
+    /**
+     * 解析要用的 cookies.txt。
+     *
+     * - 设置里选过文件：`SettingsViewModel` 已经把它复制进**私有目录**，
+     *   `cookiePathUri` 存的是私有目录里的绝对路径（不是 content://，yt-dlp 才读得了）
+     * - 没选到文件：在常见位置自动找一份，省得必须走界面选
+     *
+     * 顺带把"这次带没带 cookie"写进日志 —— 抖音这类站点完全靠它，
+     * 出问题时要能一眼看出是没带 cookie 还是带了没用。
+     */
     private fun resolveCookieFile(opts: DownloadOptions): File? {
-        if (opts.cookieMode == "file" && opts.cookiePath.isNotBlank()) {
-            val f = File(opts.cookiePath)
-            if (f.exists()) return f
+        if (opts.cookieMode != "file") return null
+
+        val configured = opts.cookiePath.trim()
+        if (configured.isNotBlank()) {
+            val f = File(configured)
+            if (f.isFile && f.length() > 0) {
+                Log.d(TAG, "cookies: 用设置里选的 ${f.absolutePath}（${f.length()} 字节）")
+                return f
+            }
+            Log.w(TAG, "cookies: 设置里的路径不可用（$configured），改为自动查找")
         }
-        val auto = File(appContext.getExternalFilesDir(null), "cookies.txt")
-        return if (auto.exists()) auto else null
+
+        val auto = listOf(
+            File(appContext.filesDir, "cookies.txt"),
+            File(appContext.getExternalFilesDir(null), "cookies.txt"),
+        ).firstOrNull { it.isFile && it.length() > 0 }
+
+        if (auto != null) {
+            Log.d(TAG, "cookies: 自动找到 ${auto.absolutePath}（${auto.length()} 字节）")
+        } else {
+            Log.w(TAG, "cookies: 模式为 file 但没找到任何 cookies.txt，本次不带 cookie")
+        }
+        return auto
     }
 
     /** 无 ffmpeg 时不合并/不转码，只下单个带声音的文件（否则会报 ffmpeg not installed） */

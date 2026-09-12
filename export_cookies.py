@@ -9,6 +9,14 @@
 导出的文件可直接给 yt-dlp 用（`--yt-dlp --cookies cookies.txt`），
 也可以拷到手机上在 VideoDL 安卓版的「设置 → Cookie 模式 → cookies.txt 文件」里选中。
 
+**运行前必须先完全退出浏览器。** 新版 Chrome / Edge 会**独占锁定** cookie 数据库，
+Windows 上连共享读都不给 —— 不退出就是这个报错：
+
+    PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。
+
+关掉所有窗口往往还不够，任务管理器里通常还留着 chrome.exe / msedge.exe 后台进程。
+本脚本会在检测到这个情况时给出人话提示，而不是丢一堆 traceback。
+
 **为什么必须带 path 字段**：Netscape 格式是 7 个 tab 分隔字段::
 
     domain  includeSubdomains  path  secure  expiry  name  value
@@ -27,6 +35,14 @@ import sys
 
 # Chrome 的 expires_utc 是"1601-01-01 起的微秒数"，Netscape 要的是 Unix 秒
 _CHROME_EPOCH_OFFSET_SEC = 11644473600
+
+# 常见 Chromium 系浏览器的 cookie 库（加密格式相同，都能用这套解密）
+_BROWSER_COOKIE_PATHS = (
+    r"Google\Chrome\User Data\Default\Network\Cookies",
+    r"Google\Chrome\User Data\Default\Cookies",
+    r"Microsoft\Edge\User Data\Default\Network\Cookies",
+    r"Microsoft\Edge\User Data\Default\Cookies",
+)
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -69,26 +85,45 @@ def netscape_line(host: str, path: str, secure, expires_utc, name: str, value: s
 
 
 def chrome_cookie_db() -> str | None:
-    for rel in (r"Google\Chrome\User Data\Default\Network\Cookies",
-                r"Google\Chrome\User Data\Default\Cookies"):
+    for rel in _BROWSER_COOKIE_PATHS:
         p = os.path.expanduser("~\\AppData\\Local\\" + rel)
         if os.path.exists(p):
             return p
     return None
 
 
+def copy_cookie_db(src: str, dst: str) -> None:
+    """把 cookie 库复制出来。
+
+    浏览器运行时会独占锁定这个文件，Windows 上连共享读都不给，报出来是
+    PermissionError(WinError 32)。这里换成人话 + 明确的操作步骤，
+    而不是甩一堆 traceback 让人以为脚本坏了。
+    """
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError:
+        print("读取失败：浏览器正在运行并锁住了 cookie 数据库。")
+        print()
+        print("请先**完全退出**浏览器再重试：")
+        print("  1) 关掉所有浏览器窗口")
+        print("  2) 打开任务管理器，把所有 chrome.exe / msedge.exe 结束掉")
+        print("     （关掉窗口后这些后台进程通常还在跑）")
+        print("  3) 重新运行本脚本")
+        sys.exit(2)
+
+
 def main() -> None:
     src = chrome_cookie_db()
     if not src:
-        print("找不到 Chrome cookies 数据库")
+        print("找不到 Chrome / Edge 的 cookies 数据库")
         sys.exit(1)
 
     # 只导出指定域名（子串匹配）—— 不传就全导
     needle = sys.argv[1].strip().lower() if len(sys.argv) > 1 else ""
 
-    # 复制一份避免被 Chrome 锁住
+    # 复制一份，避免直接动原始库
     dst = os.path.join(os.environ.get("TEMP", "/tmp"), "chrome_cookies_copy.db")
-    shutil.copy2(src, dst)
+    copy_cookie_db(src, dst)
 
     conn = sqlite3.connect(dst)
     try:
