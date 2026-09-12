@@ -317,41 +317,39 @@ def resolve_format_string(fmt: str, quality: str, platform: str = "未知") -> l
     """
     返回 yt-dlp 的 --format / --merge-output-format 参数列表。
 
-    根据平台使用不同的格式策略：
-      - YouTube：使用 ext filter 精确选择容器格式
-      - Bilibili / 其他：使用简单的高度限制，不限定 ext，避免找不到匹配格式
+    兼容优先 —— 手机相册 / 剪映(CapCut) 这类 App 只认 H.264 + AAC。
+    实测 B 站同一个分辨率下同时提供三种编码，yt-dlp 默认按"编码越新越优先"排序
+    会挑 av01（AV1）：
+        1080P → avc1 3378k / hvc1 1112k / av01 1074k（默认选中）
+        720P  → avc1 1556k / hvc1  565k / av01  532k（默认选中）
+    结果就是"后缀是 .mp4、里面是 AV1"，剪映报不支持，用户被迫去在线转码。
+    （旧版还额外踩了一个坑：YouTube 用 [ext=mp4] 过滤，而 YouTube 的 AV1 流
+      同样是 mp4 容器，所以那条路也一样会选到 AV1。）
+
+    因此统一改为：优先 avc1 + mp4a，挑不到才逐级放宽。
+    platform 参数保留是为了兼容调用方，当前策略已不分平台。
     """
     # 仅音频
     if fmt == "mp3" or quality == "audio":
         return ["-f", "bestaudio/best", "--audio-format", "mp3"]
 
-    # ---- YouTube：保留原有精确格式选择 ----
-    if platform == "YouTube":
-        if fmt == "webm":
-            selector = "bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best"
-            if quality == "1080p":
-                selector = "bestvideo[height<=1080][ext=webm]+bestaudio[ext=webm]/best[height<=1080][ext=webm]"
-            elif quality == "720p":
-                selector = "bestvideo[height<=720][ext=webm]+bestaudio[ext=webm]/best[height<=720][ext=webm]"
-            return ["-f", selector, "--merge-output-format", "webm"]
+    height = {"1080p": "[height<=1080]", "720p": "[height<=720]"}.get(quality, "")
 
-        selector = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-        if quality == "1080p":
-            selector = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]"
-        elif quality == "720p":
-            selector = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]"
-        return ["-f", selector, "--merge-output-format", "mp4"]
+    if fmt == "webm":
+        selector = (f"bestvideo{height}[ext=webm]+bestaudio[ext=webm]"
+                    f"/best{height}[ext=webm]/best")
+        return ["-f", selector, "--merge-output-format", "webm"]
 
-    # ---- Bilibili / 其他平台：不限定 ext，让 yt-dlp 自行选择 ----
-    if quality == "1080p":
-        selector = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
-    elif quality == "720p":
-        selector = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-    else:
-        selector = "bestvideo+bestaudio/best"
-
-    out_fmt = fmt  # "mp4" 或 "webm"
-    return ["-f", selector, "--merge-output-format", out_fmt]
+    # mp4：H.264 + AAC 逐级回退（第一个能被匹配到的优先）
+    selector = "/".join([
+        f"bestvideo{height}[vcodec^=avc1]+bestaudio[acodec^=mp4a]",
+        f"bestvideo{height}[vcodec^=avc1]+bestaudio",
+        f"best[ext=mp4]{height}[vcodec^=avc1]",
+        f"best[ext=mp4]{height}",
+        f"bestvideo{height}+bestaudio",
+        f"best{height}",
+    ])
+    return ["-f", selector, "--merge-output-format", "mp4"]
 
 
 def output_ext(fmt: str, quality: str) -> str:
