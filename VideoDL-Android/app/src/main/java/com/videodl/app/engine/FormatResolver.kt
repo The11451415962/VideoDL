@@ -19,37 +19,43 @@ object ProxyResolver {
 
 object Format {
     /**
-     * 返回 yt-dlp 的 format 参数 key-value 对（顺序相关），
-     * 与桌面版 resolve_format_string 一一对应。platform = Platform.detect(url)。
+     * 返回 yt-dlp 的 format 参数 key-value 对（顺序相关）。
+     *
+     * 兼容优先 —— 手机相册 / 剪映(CapCut) 这类 App 只认 H.264 + AAC。
+     * 实测 B 站同一个分辨率下同时提供三种编码，yt-dlp 默认按"编码越新越优先"
+     * 排序会挑 av01（AV1）：
+     *     1080P → avc1 3378k / hvc1 1112k / av01 1074k（默认选中）
+     *     720P  → avc1 1556k / hvc1  565k / av01  532k（默认选中）
+     * 结果就是"后缀是 .mp4、里面是 AV1"，剪映直接报不支持，用户被迫去在线转码。
+     *
+     * 所以这里一律优先 avc1 + mp4a，挑不到才逐级放宽（放宽后的编码由下载完成后的
+     * 兼容性检查 + 转码兜底，见 python/ytdlp_bridge.py）。
      */
     fun resolve(fmt: String, quality: String, platform: String): List<String> {
         if (fmt == "mp3" || quality == "audio") {
             return listOf("-f", "bestaudio/best", "--audio-format", "mp3")
         }
-        if (platform == "YouTube") {
-            return if (fmt == "webm") {
-                val sel = when (quality) {
-                    "1080p" -> "bestvideo[height<=1080][ext=webm]+bestaudio[ext=webm]/best[height<=1080][ext=webm]"
-                    "720p" -> "bestvideo[height<=720][ext=webm]+bestaudio[ext=webm]/best[height<=720][ext=webm]"
-                    else -> "bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best"
-                }
-                listOf("-f", sel, "--merge-output-format", "webm")
-            } else {
-                // 强制 H.264(avc1) 视频 + AAC(mp4a) 音频，手机相册/编辑器最通用
-                val sel = when (quality) {
-                    "1080p" -> "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=1080][vcodec^=avc1]"
-                    "720p" -> "bestvideo[height<=720][vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[height<=720][vcodec^=avc1]"
-                    else -> "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best"
-                }
-                listOf("-f", sel, "--merge-output-format", "mp4")
-            }
+
+        val height = when (quality) {
+            "1080p" -> "[height<=1080]"
+            "720p" -> "[height<=720]"
+            else -> ""
         }
-        // Bilibili / 其他：不限 ext
-        val sel = when (quality) {
-            "1080p" -> "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
-            "720p" -> "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-            else -> "bestvideo+bestaudio/best"
+
+        if (fmt == "webm") {
+            val sel = "bestvideo$height[ext=webm]+bestaudio[ext=webm]/best$height[ext=webm]/best"
+            return listOf("-f", sel, "--merge-output-format", "webm")
         }
-        return listOf("-f", sel, "--merge-output-format", fmt)
+
+        // mp4：H.264 + AAC 逐级回退（第一个能被匹配到的优先）
+        val sel = listOf(
+            "bestvideo$height[vcodec^=avc1]+bestaudio[acodec^=mp4a]",
+            "bestvideo$height[vcodec^=avc1]+bestaudio",
+            "best[ext=mp4]$height[vcodec^=avc1]",
+            "best[ext=mp4]$height",
+            "bestvideo$height+bestaudio",
+            "best$height",
+        ).joinToString("/")
+        return listOf("-f", sel, "--merge-output-format", "mp4")
     }
 }

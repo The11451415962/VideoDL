@@ -1,5 +1,7 @@
 """bridge for VideoDL Android. Chaquopy loads this from assets."""
 import json
+import os
+import subprocess
 from yt_dlp import YoutubeDL
 
 _progress_hook = None
@@ -120,6 +122,157 @@ def fetch_info(url, args_list):
         return json.dumps({"error": str(e)})
 
 
+def _ffprobe_path(ffmpeg_location):
+    """推导 ffprobe 路径。
+
+    安卓上 ffprobe 与 ffmpeg 一起躺在 nativeLibraryDir 里（libffprobe.so）；
+    主机上则是同目录的 ffprobe(.exe) —— 两种都认，方便在电脑上直接验证这段代码。
+    """
+    if not ffmpeg_location:
+        return ""
+    d = os.path.dirname(ffmpeg_location)
+    base = os.path.basename(ffmpeg_location)
+    cands = []
+    if base.endswith(".so"):
+        cands.append(os.path.join(d, base.replace("ffmpeg", "ffprobe")))
+    cands += [
+        os.path.join(d, "ffprobe.exe"),
+        os.path.join(d, "ffprobe"),
+        os.path.join(d, base.replace("ffmpeg", "ffprobe")),
+    ]
+    for p in cands:
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+def _probe(ffprobe, path):
+    """返回 (vcodec, acodec, duration_seconds)；失败返回 (None, None, 0)。"""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name:format=duration",
+             "-of", "json", path],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
+        v = a = None
+        for st in data.get("streams", []):
+            if st.get("codec_type") == "video" and v is None:
+                v = (st.get("codec_name") or "").lower()
+            elif st.get("codec_type") == "audio" and a is None:
+                a = (st.get("codec_name") or "").lower()
+        dur = 0.0
+        try:
+            dur = float(data.get("format", {}).get("duration") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        return v, a, dur
+    except Exception:
+        return None, None, 0
+
+
+def _final_path(info, output_path):
+    """合并后的真实文件路径（yt-dlp 有时会改容器导致扩展名变化）。"""
+    try:
+        rd = (info or {}).get("requested_downloads") or []
+        if rd and rd[0].get("filepath"):
+            return rd[0]["filepath"]
+    except Exception:
+        pass
+    return output_path
+
+
+def _ensure_importable(path, ffmpeg_location, duration=0):
+    """确保产出文件能被手机相册 / 剪映直接导入（H.264 + AAC + faststart）。
+
+    格式选择已经优先挑 avc1/mp4a 了，但有些清晰度只提供 HEVC/AV1（例如 B 站
+    1080P+ / 4K）。这时 relabel 成 .mp4 是骗人的 —— 用打包进来的 ffmpeg
+    真转一遍，用户就不用再去在线转码平台。
+
+    返回 (ok, reason)；reason == "cancelled" 表示用户中断。
+    """
+    global _cancel_flag
+    if not os.path.isfile(path):
+        return True, ""
+
+    vcodec, acodec, probed_dur = _probe(_ffprobe_path(ffmpeg_location), path)
+    if vcodec is None:
+        _log("[提示] 读不到编码信息，跳过兼容性检查")
+        return True, ""
+    if vcodec in ("h264",) and acodec in ("aac", None, ""):
+        return True, ""
+    if not ffmpeg_location or not os.path.isfile(ffmpeg_location):
+        _log(f"[警告] 视频编码是 {vcodec}/{acodec}，剪映等 App 可能不支持；"
+             f"未找到 ffmpeg，无法自动转码")
+        return False, f"codec={vcodec}/{acodec}"
+
+    total = duration or probed_dur or 0
+    _log(f"[提示] 视频编码是 {vcodec}（剪映不支持），正在转成 H.264 + AAC…")
+    tmp = path + ".compat.mp4"
+    cmd = [ffmpeg_location, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", path,
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+           "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "192k",
+           "-movflags", "+faststart",
+           "-progress", "pipe:1", "-nostats", tmp]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+    except Exception as e:
+        _log(f"[警告] 无法启动转码：{e}")
+        return False, str(e)
+
+    tail = []
+    try:
+        for raw in iter(proc.stdout.readline, b""):
+            if _cancel_flag:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                _log("[提示] 已取消转码")
+                return False, "cancelled"
+            line = raw.decode("utf-8", "replace").strip()
+            if line.startswith("out_time_ms=") and total > 0:
+                try:
+                    done_s = int(line.split("=", 1)[1]) / 1000000.0
+                    pct = max(0.0, min(99.0, done_s / total * 100.0))
+                    if _progress_hook is not None:
+                        _progress_hook(json.dumps(
+                            {"percent": pct, "speed": "", "eta": "转码中"}))
+                except ValueError:
+                    pass
+            elif line and not line.startswith(("frame=", "fps=", "bitrate=",
+                                               "total_size=", "out_time",
+                                               "dup_frames=", "drop_frames=",
+                                               "speed=", "progress=")):
+                tail.append(line)
+                del tail[:-6]
+        proc.wait(timeout=30)
+    except Exception as e:
+        _log(f"[警告] 转码过程出错：{e}")
+        return False, str(e)
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+
+    if _cancel_flag:
+        return False, "cancelled"
+    if proc.returncode != 0 or not os.path.isfile(tmp):
+        _log(f"[警告] 转码失败（返回码 {proc.returncode}）：{' | '.join(tail)[:300]}")
+        return False, "transcode-failed"
+    try:
+        os.replace(tmp, path)
+    except Exception as e:
+        _log(f"[警告] 转码结果写入失败：{e}")
+        return False, str(e)
+    _log("[完成] 已转成 H.264 + AAC，手机相册 / 剪映可直接导入")
+    return True, ""
+
+
 def download(url, output_path, args_list, ffmpeg_location=""):
     """执行下载，返回 JSON {"ok":true/false,"path":"...","error":"..."}。"""
     global _cancel_flag
@@ -136,8 +289,22 @@ def download(url, output_path, args_list, ffmpeg_location=""):
             opts["ffmpeg_location"] = ffmpeg_location
         _merge_args(opts, args_list)
         with YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        return json.dumps({"ok": True, "path": output_path})
+            # 用 extract_info(download=True) 而不是 download()，为了拿到合并后
+            # 的真实文件路径和时长（转码进度要用）
+            info = ydl.extract_info(url, download=True)
+        if _cancel_flag:
+            return json.dumps({"ok": False, "error": "__CANCELLED__"})
+        final_path = _final_path(info, output_path)
+        try:
+            duration = int((info or {}).get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0
+        _, reason = _ensure_importable(final_path, ffmpeg_location, duration)
+        if reason == "cancelled":
+            return json.dumps({"ok": False, "error": "__CANCELLED__"})
+        if not os.path.isfile(final_path):
+            return json.dumps({"ok": False, "error": "下载结束但找不到输出文件：" + final_path})
+        return json.dumps({"ok": True, "path": final_path})
     except KeyboardInterrupt:
         return json.dumps({"ok": False, "error": "__CANCELLED__"})
     except Exception as e:

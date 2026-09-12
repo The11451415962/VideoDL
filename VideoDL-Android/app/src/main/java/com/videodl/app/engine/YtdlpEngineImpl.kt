@@ -54,7 +54,11 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         }
         return when {
             opts.quality == "audio" || opts.format == "mp3" -> listOf("-f", "bestaudio/best")
-            else -> listOf("-f", "b[ext=${opts.format}]/b")
+            // 挑不到 avc1 才退而求其次（没有 ffmpeg 就没法转码，只能尽量挑兼容的）
+            else -> listOf(
+                "-f",
+                "b[ext=${opts.format}][vcodec^=avc1]/b[ext=${opts.format}]/b",
+            )
         }
     }
 
