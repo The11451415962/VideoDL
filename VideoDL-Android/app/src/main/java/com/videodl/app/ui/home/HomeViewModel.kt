@@ -69,7 +69,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             eta = dl.eta,
             status = dl.status,
             logs = dl.logs,
-            finishedFile = dl.finishedUri ?: sel.finishedFile,
+            // 新任务 begin() 后 finishedUri 为 null，不能再粘住上一次的文件
+            finishedFile = dl.finishedUri,
             errorMessage = dl.error,
             destination = dl.destination.ifBlank { sel.destination },
         )
@@ -146,7 +147,13 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         DownloadCenter.reset()
         // 先在格式表里反查用户点的是哪一行（用它判断"这是不是一条纯音频流"）。
         // 画质标签用"短边"叫法（竖屏 1080×1920 显示为 1080p）。
-        val picked = s.formats.firstOrNull { fmt -> selector.isNotBlank() && selector.contains(fmt.id) }
+        //
+        // 用「精确 id 匹配」而不是 contains：id "1" 是 "137"/"31" 的子串，
+        // contains 会误判成音频/别的格式。downloadSelector 可能是 "137+bestaudio/..."，
+        // 所以按 + 、 / 拆开后精确比。
+        val picked = s.formats.firstOrNull { fmt ->
+            selector.isNotBlank() && selector.split('+', '/').any { it.trim() == fmt.id }
+        }
         val audioPicked = picked?.audioOnly == true
         val format = formatOverride.ifBlank {
             // 旧版判的是 `selector.startsWith("bestaudio")`，但 downloadSelector 返回的是

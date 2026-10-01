@@ -199,12 +199,15 @@ def _probe(ffprobe, path):
     try:
         out = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries",
-             "stream=codec_type,codec_name:format=duration",
+             "stream=codec_type,codec_name,disposition:format=duration",
              "-of", "json", path],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
         data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
         v = a = None
         for st in data.get("streams", []):
+            disposition = st.get("disposition") or {}
+            if disposition.get("attached_pic"):
+                continue
             if st.get("codec_type") == "video" and v is None:
                 v = (st.get("codec_name") or "").lower()
             elif st.get("codec_type") == "audio" and a is None:
@@ -217,6 +220,136 @@ def _probe(ffprobe, path):
         return v, a, dur
     except Exception:
         return None, None, 0
+
+
+def _has_color_info(ffprobe, path):
+    """视频流有没有色彩描述。返回 True/False；探测不出来返回 None（未知）。"""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "stream=codec_type,color_primaries,color_transfer,color_space",
+             "-of", "json", path],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+        data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
+        for st in data.get("streams", []):
+            if st.get("codec_type") == "video":
+                return all(st.get(k) not in (None, "", "unknown")
+                           for k in ("color_primaries", "color_transfer", "color_space"))
+        return None
+    except Exception:
+        return None
+
+
+def _run_copy_remux(ffmpeg_location, path, tmp):
+    """`-c copy` 重封装并补上色彩参数，返回 (returncode, 尾部输出)。
+
+    注意是 `-c copy`：不重新编码，所以**没有编码器的精简 ffmpeg 也能跑**
+    （实测 25 秒视频只多 19~35 字节）。
+    """
+    cmd = [ffmpeg_location, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", path,
+           "-c", "copy",
+           "-color_primaries", "bt709", "-color_trc", "bt709",
+           "-colorspace", "bt709", "-color_range", "tv",
+           "-movflags", "+faststart", tmp]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+    except Exception as e:
+        return 127, [f"无法启动 ffmpeg: {e}"]
+    tail = []
+    try:
+        for raw in iter(proc.stdout.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if line:
+                tail.append(line)
+                del tail[:-4]
+        proc.wait(timeout=300)
+    except Exception as e:
+        tail.append(f"重封装异常: {e}")
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+    return proc.returncode, tail
+
+
+def _ensure_color_metadata(path, ffmpeg_location):
+    """给 MP4 补上色彩描述（容器里的 `colr` box + SPS 里的 VUI 色彩）。
+
+    **为什么必须做**：真机实测（2026-09-13）—— YouTube 的原始 H.264 流被 `-c copy`
+    原样封装进来的 MP4，在手机相册和剪映里**能播，但一点「编辑」就报「格式不支持」**；
+    而同一段视频**重新编码**过的（ffmpeg/libx264 会自动写 colr + pasp）就能正常编辑。
+
+    对照实验（同一段视频，转过格式 vs 没转）：
+
+        avc1 采样描述:  avcC  btrt                     ← 编辑不了
+        avc1 采样描述:  avcC  colr(19B)  pasp(16B)  btrt ← 能编辑
+
+    其余（编码/profile/level/分辨率/帧率/像素格式/音频参数/容器品牌）**完全相同**。
+    媒体库里也印证了同一点：缺色彩信息的文件 color_range/standard/transfer 都是 NULL。
+    结论：编辑器建立色彩管线需要这个信息，没有就拒。
+
+    **怎么补**：`-c copy` 重封装一次并指定色彩参数即可，**不需要重新编码**，
+    手机上那个没有编码器的精简 ffmpeg 也能跑（已实测，输出 colr 与能编辑的文件字节相同）。
+
+    探测不出来（None）就什么都不做 —— 宁可不动，也不要瞎改用户的文件。
+    失败也不影响下载：保留原文件，顶多还是编辑不了。
+    """
+    if not ffmpeg_location or not os.path.isfile(ffmpeg_location):
+        return
+    if not path.lower().endswith(".mp4"):
+        return                                   # colr 是 mp4 的概念，mkv/webm 不适用
+    if _has_color_info(_ffprobe_path(ffmpeg_location), path) is not False:
+        return                                   # 已有色彩信息，或未知 → 不动
+
+    tmp = path + ".colr.mp4"
+    rc, tail = _run_copy_remux(ffmpeg_location, path, tmp)
+    if rc == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+        try:
+            os.replace(tmp, path)
+            _log("[提示] 已补上色彩信息（相册 / 剪映才能「编辑」这个视频）")
+        except Exception as e:
+            _log(f"[警告] 色彩信息写入失败：{e}")
+    else:
+        _log(f"[警告] 补色彩信息失败，保留原文件：{' | '.join(tail)[:160]}")
+    try:
+        if os.path.isfile(tmp):
+            os.remove(tmp)
+    except Exception:
+        pass
+
+
+def remux_two_inputs(video_only, original, out, ffmpeg_location):
+    """把「重新编码过的视频轨」和「原始音频轨」合成一个 mp4。
+
+    两条流都是 `-c copy` 纯搬运，**不重新编码**，所以打包的精简 ffmpeg（没有编码器）
+    也能跑。顺带补上 `colr` 色彩描述和 faststart。
+
+    `-map 1:a:0?` 末尾的问号让音频轨可选：源文件没有音频时照样能合成。
+
+    返回 JSON 字符串 {"ok":true} 或 {"ok":false,"error":"..."}（与其他桥函数一致）。
+    """
+    if not ffmpeg_location or not os.path.isfile(ffmpeg_location):
+        return json.dumps({"ok": False, "error": "没有可用的 ffmpeg"})
+    cmd = [ffmpeg_location, "-y", "-hide_banner", "-loglevel", "error",
+           "-i", video_only, "-i", original,
+           "-map", "0:v:0", "-map", "1:a:0?",
+           "-c", "copy",
+           "-color_primaries", "bt709", "-color_trc", "bt709",
+           "-colorspace", "bt709", "-color_range", "tv",
+           "-movflags", "+faststart", out]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=900)
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"无法启动 ffmpeg: {e}"})
+    if proc.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+        return json.dumps({"ok": True})
+    tail = proc.stdout.decode("utf-8", "replace").strip().splitlines()[-3:]
+    return json.dumps({"ok": False, "error": " | ".join(tail)
+                       or f"ffmpeg 退出码 {proc.returncode}"})
 
 
 def _final_path(info, output_path):
@@ -354,10 +487,16 @@ def _ensure_importable(path, ffmpeg_location, duration=0):
     global _cancel_flag
     if not os.path.isfile(path):
         return True, ""
+    # 音频产物绝不能走「转成 H.264 视频」——否则会变成内容是 MP4、后缀还是音频的怪文件
+    if os.path.splitext(path)[1].lower() in {
+        ".mp3", ".m4a", ".aac", ".opus", ".ogg", ".wav", ".flac", ".wma",
+    }:
+        _log("[信息] 音频文件，跳过视频兼容性转码")
+        return True, ""
 
     vcodec, acodec, probed_dur = _probe(_ffprobe_path(ffmpeg_location), path)
     if vcodec is None:
-        _log("[提示] 读不到编码信息，跳过兼容性检查")
+        _log("[信息] 无视频轨（或仅有封面图），跳过视频兼容性转码")
         return True, ""
     if vcodec == "h264" and acodec in ("aac", None, ""):
         return True, ""
@@ -442,11 +581,20 @@ def download(url, output_path, args_list, ffmpeg_location=""):
             duration = int((info or {}).get("duration") or 0)
         except (TypeError, ValueError):
             duration = 0
-        _, reason = _ensure_importable(final_path, ffmpeg_location, duration)
+        ok, reason = _ensure_importable(final_path, ffmpeg_location, duration)
         if reason == "cancelled":
             return json.dumps({"ok": False, "error": "__CANCELLED__"})
+        # 补色彩描述（-c copy，不重编码）：缺了它，相册/剪映里能播但一点「编辑」就报
+        # 「格式不支持」。放在转码之后，保证最终落盘的文件一定带上。
+        if not _cancel_flag:
+            _ensure_color_metadata(final_path, ffmpeg_location)
         if not os.path.isfile(final_path):
             return json.dumps({"ok": False, "error": "下载结束但找不到输出文件：" + final_path})
+        if not ok:
+            return json.dumps({
+                "ok": True, "path": final_path,
+                "warning": "编码不兼容，剪映/相册可能无法打开",
+            })
         return json.dumps({"ok": True, "path": final_path})
     except KeyboardInterrupt:
         return json.dumps({"ok": False, "error": "__CANCELLED__"})

@@ -41,7 +41,11 @@ tools/ffmpeg.exe
 # 日志
 *.log
 
-# ���س����Ĳ�����Ƶ��Ҫ���
+# 下载出来的测试视频不要入库
 *.mp4
 *.webm
 *.mkv
+
+# 本地编解码对照实验与测试音频
+.compat-analysis/
+测试-*.mp3

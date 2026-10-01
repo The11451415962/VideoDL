@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只打包进 debug 的清单：给"验证转码是否让编辑器认账"用的一次性入口。
+  release 包里不会有这个 Activity。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.videodl.app.debug.TranscodeProbe"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:label="TranscodeProbe">
+            <intent-filter>
+                <action android:name="com.videodl.app.TRANSCODE_PROBE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

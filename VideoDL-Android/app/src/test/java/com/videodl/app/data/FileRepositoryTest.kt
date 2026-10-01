@@ -16,6 +16,45 @@ class NamingTest {
         assertEquals("a_b_c_d", Naming.sanitize("a/b\\c:d"))
         assertEquals("clean title", Naming.sanitize("clean title"))
     }
+
+    /**
+     * 回归测试：`#` 和 `%` 必须从文件名里去掉。
+     * 社交平台标题里的 `#话题`（`#aura`、`#shorts`）会让文件名带 `#`，别被"优化"掉。
+     */
+    @Test fun sanitize_removesUriHostileChars() {
+        assertEquals("aura", Naming.sanitize("#aura"))
+        assertEquals("100_", Naming.sanitize("100%"))
+        assertFalse("不能留 #", Naming.sanitize("#aura #mc").contains('#'))
+        assertFalse("不能留 %", Naming.sanitize("a%b").contains('%'))
+    }
+
+    /**
+     * 回归测试：文件名开头必须落在字母/数字上。
+     *
+     * 目的是让落盘名字干净（不留 `#`/`_`/`.` 这类开头）—— `.` 开头会变成隐藏文件，
+     * `#` 是 URI 片段分隔符。注意这**不是** ColorOS 相册「编辑」报错的原因，
+     * 那条已经用对照实验排除了（见 sanitize 的注释），别把两件事混起来。
+     */
+    @Test fun sanitize_stripsLeadingNonAlphanumeric() {
+        assertEquals("aura", Naming.sanitize("#aura"))
+        assertEquals("aura", Naming.sanitize("_aura"))
+        assertEquals("我的世界", Naming.sanitize("#我的世界"))
+        assertEquals("aura", Naming.sanitize("...aura"))
+        // 中间的下划线不受影响（规则只管开头，别扩大成"去掉所有下划线"）
+        assertEquals("a_b", Naming.sanitize("a_b"))
+        // 全是符号 → 空串，交给 buildOutputPath 的 ifBlank 兜底成 "video"
+        assertEquals("", Naming.sanitize("###"))
+    }
+
+    @Test fun buildOutputPath_stripsHashAndLeadingUnderscore() {
+        // 下到 "#aura #shorts" 这种标题时，落盘文件名既不能带 #，也不能以 _ 开头
+        val dir = createTempDir().absolutePath
+        val path = FileRepository.buildOutputPath(dir, "#aura #shorts", "mp4", "best")
+        val fileName = path.removePrefix("$dir/")
+        assertFalse("不该含 #：$path", path.contains('#'))
+        assertTrue("开头应是字母/数字，实际：$fileName",
+            fileName.isNotEmpty() && fileName[0].isLetterOrDigit())
+    }
 }
 
 /**

@@ -82,6 +82,9 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
             // 音频产物是单条音轨，没有"合并"这一步，不要传 --merge-output-format
             if (!MediaTarget.isAudio(opts.format, opts.quality)) {
                 args += listOf("--merge-output-format", opts.format.ifBlank { "mp4" })
+            } else {
+                // 选了具体音频流也要抽音，避免合并流被当成音频后缀落盘
+                args += listOf("--extract-audio", "--audio-format", MediaTarget.AUDIO_EXT)
             }
             return args
         }
@@ -91,7 +94,8 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         }
         return when {
             MediaTarget.isAudio(opts.format, opts.quality) ->
-                listOf("-f", "bestaudio[acodec^=mp4a]/bestaudio")
+                listOf("-f", "bestaudio[acodec^=mp4a]/bestaudio",
+                       "--extract-audio", "--audio-format", MediaTarget.AUDIO_EXT)
             // 挑不到 avc1 才退而求其次（没有 ffmpeg 就没法合并，只能尽量挑兼容的）
             else -> listOf(
                 "-f",
@@ -150,6 +154,15 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
         if (opts.platform == "Bilibili") {
             args += listOf("--add-header", "Referer:https://www.bilibili.com/",
                           "--add-header", "Origin:https://www.bilibili.com")
+        }
+        // 抖音要浏览器 UA + Referer，否则接口返回空 JSON（「Fresh cookies needed」）
+        if (opts.platform == "抖音") {
+            args += listOf(
+                "--add-header",
+                "User-Agent:Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                "--add-header", "Referer:https://www.douyin.com/",
+            )
         }
         val vpnActive = isVpnActive()
         val (proxy, note) = resolveProxy(opts, vpnActive)
@@ -273,6 +286,63 @@ class YtdlpEngineImpl(context: Context) : YtdlpEngine {
             close()
         }
         awaitClose { cancelled = true }
+    }
+
+    /** 把「重编过的视频轨」和「原始音频轨」合成一个 mp4（两条流都纯搬运、不重编）。 */
+    private fun remuxKeepingAudio(videoOnly: File, original: File, out: File,
+                                  ffmpegLocation: String): Boolean = try {
+        val res = JSONObject(
+            bridge.callAttr(
+                "remux_two_inputs", videoOnly.absolutePath,
+                original.absolutePath, out.absolutePath, ffmpegLocation,
+            ).toString(),
+        )
+        if (!res.optBoolean("ok")) {
+            Log.e(TAG, "remux failed: ${res.optString("error")}")
+        }
+        res.optBoolean("ok")
+    } catch (e: Exception) {
+        Log.e(TAG, "remux exception", e)
+        false
+    }
+
+    /**
+     * 让产物在手机相册 / 剪映里**能被编辑**。
+     *
+     * 平台给的原始 H.264 流（yt-dlp 用 `-c copy` 原样封装）会被 ColorOS 编辑器和剪映拒绝
+     * （能播不能编，报「格式不支持」）。实测只有**重新编码过的视频流**才认，音频不用动
+     * —— 详见 [VideoTranscoder] 里的对照实验表。
+     *
+     * 流程：MediaCodec 硬件重编视频 → 打包的 ffmpeg 把重编视频 + 原始音频合成
+     * （`-c copy`，顺带补 colr/faststart）。**全程不需要 H.264 编码器以外的能力**，
+     * 也不涉及 GPL 组件。
+     *
+     * 失败返回 null（调用方保留原文件即可，顶多还是编辑不了，不会更糟）。
+     */
+    override fun makeEditorFriendly(src: File, ffmpegLocation: String): File? {
+        if (!src.isFile || src.length() <= 0) return null
+        val tmpVideo = File(src.parentFile, "${src.nameWithoutExtension}.tv.mp4")
+        val out = File(src.parentFile, "${src.nameWithoutExtension}.edit.mp4")
+        val started = System.currentTimeMillis()
+        try {
+            val r = VideoTranscoder.transcodeVideo(src, tmpVideo)
+            if (!r.ok) {
+                Log.e(TAG, "editor-friendly: 视频重编失败 ${r.reason}")
+                return null
+            }
+            Log.d(TAG, "editor-friendly: 视频重编完成 ${r.frames} 帧 " +
+                "(${System.currentTimeMillis() - started}ms)")
+            if (!remuxKeepingAudio(tmpVideo, src, out, ffmpegLocation)) return null
+            if (!out.isFile || out.length() <= 0) return null
+            Log.d(TAG, "editor-friendly: 合成完成 ${out.length()} 字节 " +
+                "(${System.currentTimeMillis() - started}ms)")
+            return out
+        } catch (e: Exception) {
+            Log.e(TAG, "editor-friendly failed", e)
+            return null
+        } finally {
+            runCatching { tmpVideo.delete() }
+        }
     }
 
     override fun cancel() {

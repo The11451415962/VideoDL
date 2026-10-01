@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AssistChip
@@ -106,7 +105,7 @@ fun HomeScreen(
         TextField(
             value = state.url,
             onValueChange = vm::onUrlChanged,
-            placeholder = { Text("搜索或输入 URL") },
+            placeholder = { Text("粘贴视频链接或分享文案") },
             singleLine = true,
             shape = CircleShape,
             colors = TextFieldDefaults.colors(
@@ -117,8 +116,9 @@ fun HomeScreen(
                 disabledIndicatorColor = Color.Transparent,
             ),
             leadingIcon = {
-                IconButton(onClick = vm::pasteFromClipboard) {
-                    Icon(Icons.Filled.Create, contentDescription = "粘贴")
+                // 用「粘贴」文字代替铅笔图标：core icons 没有 ContentPaste，铅笔语义也不对
+                TextButton(onClick = vm::pasteFromClipboard) {
+                    Text("粘贴", style = MaterialTheme.typography.labelLarge)
                 }
             },
             trailingIcon = {
@@ -146,6 +146,34 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+
+        // 空状态：避免中间整屏空白像卡死
+        if (state.info == null && !state.fetching && !state.busy) {
+            Spacer(Modifier.height(48.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "粘贴链接后点右侧放大镜抓取",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "支持 YouTube / B站 / 抖音 分享文案",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
 
         // 结果卡：缩略图铺满整张卡，文字压在上面，右下两个圆形按钮
@@ -357,13 +385,10 @@ private fun DownloadStatusCard(
                         Text("停止")
                     }
                 } else if (finished) {
-                    Button(onClick = onOpen, modifier = Modifier.weight(1f)) {
+                    Button(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
                         Text("播放")
-                    }
-                    OutlinedButton(onClick = onCancel, enabled = false, modifier = Modifier.weight(1f)) {
-                        Text("再下一次")
                     }
                 }
             }

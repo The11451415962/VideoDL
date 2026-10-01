@@ -84,8 +84,12 @@ object Format {
         if (MediaTarget.isAudio(fmt, quality)) {
             // 音轨优先挑 AAC：源是 AAC 时 --audio-format m4a 走的是 copy（重新封装），
             // 不需要任何编码器；挑到 Opus 就得转码，而精简版 ffmpeg 没有 aac 编码器。
+            //
+            // 必须 --extract-audio：否则抖音这类只有合并流的站点会把视频直接存成音频后缀，
+            // 拖进剪映就「有画面」。bestaudio/xxx 是在没有纯音频流时退回合并流再抽音轨。
             return listOf(
-                "-f", "bestaudio[acodec^=mp4a]/bestaudio",
+                "-f", "bestaudio/best",
+                "--extract-audio",
                 "--audio-format", MediaTarget.AUDIO_EXT,
             )
         }

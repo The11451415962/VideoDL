@@ -1,5 +1,6 @@
 package com.videodl.app.engine
 
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 
 sealed class DownloadEvent {
@@ -35,4 +36,15 @@ interface YtdlpEngine {
 
     fun download(options: DownloadOptions): Flow<DownloadEvent>
     fun cancel()
+
+    /**
+     * 让产物在手机相册 / 剪映里**能被编辑**：用 MediaCodec 把视频流重编一遍。
+     *
+     * 平台给的原始 H.264 流会被 ColorOS 编辑器和剪映拒绝（能播不能编），
+     * 只有重新编码过的视频流才认 —— 详见 [VideoTranscoder] 里的对照实验表。
+     *
+     * 成功返回新文件（调用方负责替换/发布），失败返回 null（保留原文件）。
+     * 内部阻塞，必须在后台线程调用。
+     */
+    fun makeEditorFriendly(src: File, ffmpegLocation: String): File?
 }
