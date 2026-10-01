@@ -12,6 +12,12 @@
 
 > 两个桌面版共用同一份后端逻辑（`video_downloader.py` 既是经典版主程序，也是 Qt 版的 `core` 模块）和同一份 `config.json`，所以换版本不用重配。
 
+### 界面预览
+
+桌面 Fluent 版主界面（粘贴链接 → 选格式画质 → 开始下载）：
+
+![桌面 Fluent 版主界面](docs/screenshots/desktop-main.png)
+
 ## 功能
 
 两个桌面版都有：
